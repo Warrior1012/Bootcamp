@@ -89,7 +89,7 @@ export default function App() {
 
   const allCompanies = data?.companies || [];
   const categories = Array.from(
-    new Set(allCompanies.map((company: any) => categoryOf(company))),
+    new Set<string>(allCompanies.map((company: any) => categoryOf(company))),
   ).sort((a: string, b: string) => a.localeCompare(b));
   const needle = q.trim().toLowerCase();
   const companies = allCompanies.filter((company: any) => {
