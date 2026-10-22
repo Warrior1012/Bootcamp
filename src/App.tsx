@@ -14,7 +14,6 @@ import { loadData } from './lib/supabase';
 import type {
   AppData,
   CompanyRecord,
-  CompanyProfileRecord,
   ProfileField,
   ProficiencyLevelRecord,
   SkillRequirementRecord,
