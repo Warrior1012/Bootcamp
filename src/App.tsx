@@ -1089,7 +1089,7 @@ export default function App() {
               <span>{visibleSkills.length} skill areas</span>
             </div>
             <div className="skill-grid">
-              {visibleSkills.map((skill) => {}
+              {visibleSkills.map((skill) => {
                 const level = skill.req?.required_level;
                 const levelIsPresent = hasValue(level);
                 const proficiencyName = skill.proficiency?.proficiency_name;
