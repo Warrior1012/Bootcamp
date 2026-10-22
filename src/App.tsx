@@ -446,8 +446,8 @@ export default function App() {
     const csv = [
       ['Company ID', 'Company', 'Category', 'Status', 'Saved', 'Follow-up date', 'Notes'],
       ...rows,
-    ].map((row) => row.map(escapeCsv).join(',')).join('\\r\\n');
-    const url = URL.createObjectURL(new Blob(['\\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }));
+    ].map((row) => row.map(escapeCsv).join(',')).join('\r\n');
+    const url = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }));
     const anchor = document.createElement('a');
     anchor.href = url;
     anchor.download = 'jssu-placement-tracker.csv';
