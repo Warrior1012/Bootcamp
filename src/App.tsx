@@ -17,6 +17,8 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Download,
+  Upload,
   GraduationCap,
   BookOpen,
   CheckCircle2,
@@ -568,24 +570,148 @@ export default function App() {
       : previous.length < 3 ? [...previous, companyId] : previous);
   }
 
+  function csvCell(value: unknown): string {
+    const input = String(value ?? '');
+    // Prevent spreadsheet applications from evaluating user-entered text as a formula.
+    const safe = /^[=+@\\-\\t\\r]/.test(input) ? "'" + input : input;
+    return '"' + safe.replace(/"/g, '""') + '"';
+  }
+
+  function downloadTextFile(filename: string, content: string, mimeType: string) {
+    const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
   function exportTrackerCsv() {
     const rows = trackedCompanies.map((company) => {
       const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
       return [company.company_id, company.name || '', categoryOf(company), item.status, item.saved ? 'Yes' : 'No', item.followUpDate, item.notes];
     });
-    const escapeCsv = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
     const csv = [
       ['Company ID', 'Company', 'Category', 'Status', 'Saved', 'Follow-up date', 'Notes'],
       ...rows,
-    ].map((row) => row.map(escapeCsv).join(',')).join('\r\n');
-    const url = URL.createObjectURL(new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }));
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = 'jssu-placement-tracker.csv';
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-    URL.revokeObjectURL(url);
+    ].map((row) => row.map(csvCell).join(',')).join('\\r\\n');
+    downloadTextFile('jssu-placement-tracker.csv', '\\ufeff' + csv, 'text/csv;charset=utf-8;');
+  }
+
+  function exportPrepPlanCsv() {
+    const rows: unknown[][] = [
+      ['Record type', 'Name / task', 'Skill', 'Rating (1-5)', 'Company target (10-point scale)', 'Status', 'Details'],
+      ['Profile', 'Career track', '', '', '', '', studentProfile.careerTrack],
+      ['Profile', 'Target role', '', '', '', '', studentProfile.targetRole],
+      ['Profile', 'Graduation year', '', '', '', '', studentProfile.graduationYear],
+      ['Profile', 'Weekly study hours', '', '', '', '', studentProfile.weeklyHours],
+      ...skills.map((skill) => {
+        const rating = skillRatings[String(skill.skill_set_id)] || '';
+        const target = skill.req && hasValue(skill.req.required_level) && Number.isFinite(Number(skill.req.required_level))
+          ? Number(skill.req.required_level)
+          : '';
+        const status = rating === ''
+          ? 'Not assessed'
+          : target === ''
+            ? 'Self-assessment only'
+            : Number(rating) * 2 < Number(target)
+              ? 'Below available target'
+              : 'At or above available target';
+        return ['Skill', displayValue(skill.skill_set_name), displayValue(skill.skill_set_name), rating, target, status, displayValue(skill.skill_set_description)];
+      }),
+      ...prepTasks.map((task) => [
+        'Weekly task',
+        task.title,
+        task.skillName,
+        skillRatings[String(skills.find((skill) => displayValue(skill.skill_set_name) === task.skillName)?.skill_set_id)] || '',
+        '',
+        prepChecklist[task.id] ? 'Complete' : 'Pending',
+        task.detail,
+      ]),
+    ];
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\\r\\n');
+    downloadTextFile('jssu-prep-plan.csv', '\\ufeff' + csv, 'text/csv;charset=utf-8;');
+  }
+
+  function exportWorkspaceBackup() {
+    const payload = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      description: 'JSSU Placement Intelligence Hub local-only workspace backup',
+      data: { tracker, studentProfile, skillRatings, prepChecklist },
+    };
+    downloadTextFile(
+      'jssu-placement-workspace-backup.json',
+      JSON.stringify(payload, null, 2),
+      'application/json;charset=utf-8;',
+    );
+  }
+
+  async function importWorkspaceBackup(file?: File) {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('The backup file is not a JSON object.');
+      }
+      const envelope = parsed as Record<string, unknown>;
+      if (envelope.schemaVersion !== 1 || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
+        throw new Error('This backup format is not supported.');
+      }
+      const payload = envelope.data as Record<string, unknown>;
+      for (const key of ['tracker', 'studentProfile', 'skillRatings', 'prepChecklist']) {
+        if (!payload[key] || typeof payload[key] !== 'object' || Array.isArray(payload[key])) {
+          throw new Error('The backup is missing valid ' + key + ' data.');
+        }
+      }
+
+      const rawProfile = payload.studentProfile as Record<string, unknown>;
+      const rawHours = Number(rawProfile.weeklyHours);
+      const safeProfile: StudentProfile = {
+        name: typeof rawProfile.name === 'string' ? rawProfile.name.slice(0, 120) : '',
+        graduationYear: typeof rawProfile.graduationYear === 'string' && /^\\d{4}$/.test(rawProfile.graduationYear) ? rawProfile.graduationYear : '',
+        targetRole: typeof rawProfile.targetRole === 'string' ? rawProfile.targetRole.slice(0, 160) : '',
+        careerTrack: typeof rawProfile.careerTrack === 'string' && CAREER_TRACKS.includes(rawProfile.careerTrack) ? rawProfile.careerTrack : DEFAULT_STUDENT_PROFILE.careerTrack,
+        weeklyHours: Number.isFinite(rawHours) ? Math.min(20, Math.max(1, Math.round(rawHours))) : DEFAULT_STUDENT_PROFILE.weeklyHours,
+      };
+
+      const safeTracker: TrackerStore = {};
+      const rawTracker = payload.tracker as Record<string, unknown>;
+      for (const [id, value] of Object.entries(rawTracker)) {
+        if (!/^\\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+        const item = value as Record<string, unknown>;
+        safeTracker[id] = {
+          saved: Boolean(item.saved),
+          status: TRACKER_STATUSES.includes(item.status as TrackerStatus) ? item.status as TrackerStatus : 'Not tracked',
+          notes: typeof item.notes === 'string' ? item.notes.slice(0, 10000) : '',
+          followUpDate: typeof item.followUpDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(item.followUpDate) ? item.followUpDate : '',
+          updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt.slice(0, 64) : '',
+        };
+      }
+
+      const safeRatings: Record<string, number> = {};
+      for (const [id, value] of Object.entries(payload.skillRatings as Record<string, unknown>)) {
+        const rating = Number(value);
+        if (/^\\d+$/.test(id) && Number.isInteger(rating) && rating >= 1 && rating <= 5) safeRatings[id] = rating;
+      }
+
+      const safeChecklist: Record<string, boolean> = {};
+      for (const [id, value] of Object.entries(payload.prepChecklist as Record<string, unknown>)) {
+        if (typeof id === 'string' && id.length <= 300 && typeof value === 'boolean') safeChecklist[id] = value;
+      }
+
+      if (!window.confirm('Restore this backup? It will replace the tracker, student profile, skill ratings and checklist currently stored in this browser.')) return;
+      setTracker(safeTracker);
+      setStudentProfile(safeProfile);
+      setSkillRatings(safeRatings);
+      setPrepChecklist(safeChecklist);
+      window.alert('Workspace backup restored successfully.');
+    } catch (error) {
+      console.error('Workspace backup could not be restored.', error);
+      window.alert(error instanceof Error ? 'Could not restore backup: ' + error.message : 'Could not restore this backup file.');
+    }
   }
 
   function companyLogo(companyId: number): string | null {
@@ -1366,8 +1492,31 @@ export default function App() {
               <span>{prepTasks.length} suggested tasks</span>
             </div>
 
-            <div className="note" style={{ marginTop: 0, marginBottom: 18 }}>
+            <div className="note" style={{ marginTop: 0, marginBottom: 14 }}>
               <UserRound size={15} /> Your profile, ratings and completed tasks save automatically in this browser. There is no account sync.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 22 }}>
+              <button type="button" className="page-button" onClick={exportPrepPlanCsv}>
+                <Download size={13} /> Export study plan CSV
+              </button>
+              <button type="button" className="page-button" onClick={exportWorkspaceBackup}>
+                <Download size={13} /> Back up all progress
+              </button>
+              <label className="page-button" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <Upload size={13} /> Restore backup
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  aria-label="Choose a JSSU workspace backup JSON file"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = '';
+                    void importWorkspaceBackup(file);
+                  }}
+                  style={{ display: 'none' }}
+                />
+              </label>
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(245px, 1fr))', gap: 14, marginBottom: 24 }}>
