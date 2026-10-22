@@ -19,11 +19,9 @@ const key =
 export const supabase = url && key ? createClient(url, key) : null;
 
 type Row = Record<string, unknown>;
-type QueryResponse<T> = { data: T[] | null; error: { message: string } | null };
-
 async function optionalRows<T = Row>(
   name: string,
-  request: PromiseLike<QueryResponse<T>>,
+  request: PromiseLike<{ data: any; error: { message: string } | null }>,
   warnings: string[],
 ): Promise<T[]> {
   try {
@@ -33,7 +31,7 @@ async function optionalRows<T = Row>(
       console.warn('Optional Supabase dataset unavailable:', name, result.error.message);
       return [];
     }
-    return result.data ?? [];
+    return (result.data ?? []) as T[];
   } catch (error) {
     warnings.push(name);
     console.warn('Optional Supabase dataset could not be read:', name, error);
