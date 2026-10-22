@@ -378,7 +378,7 @@ export default function App() {
     ...(current?.name ? [{ label: 'Find jobs', href: 'https://www.linkedin.com/jobs/search/?keywords=' + encodeURIComponent(current.name) }] : []),
     ...(current?.name ? [{ label: 'Search internships', href: 'https://www.google.com/search?q=' + encodeURIComponent(current.name + ' internships careers') }] : []),
   ];
-  const signalFields: [string, unknown][] = [
+  const signalFields = ([
     ['CEO / leadership', full.ceo_name || full.key_leaders],
     ['Technology stack', full.tech_stack],
     ['Focus sectors', full.focus_sectors],
@@ -388,7 +388,7 @@ export default function App() {
     ['Recent news', full.recent_news],
     ['Key competitors', full.key_competitors],
     ['Growth signal', full.yoy_growth_rate],
-  ].filter((item) => hasValue(item[1]));
+  ] as [string, unknown][]).filter((item) => hasValue(item[1]));
   const profileFields: ProfileField[] = current
     ? [
         { label: 'Category', value: current.category },
