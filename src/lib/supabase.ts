@@ -21,7 +21,7 @@ export const supabase = url && key ? createClient(url, key) : null;
 type Row = Record<string, unknown>;
 type QueryResponse<T> = { data: T[] | null; error: { message: string } | null };
 
-async function optionalRows<T extends Row = Row>(
+async function optionalRows<T = Row>(
   name: string,
   request: PromiseLike<QueryResponse<T>>,
   warnings: string[],
