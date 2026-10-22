@@ -6,13 +6,249 @@ import {
   RefreshCw,
   Database,
   AlertCircle,
+  Bookmark,
+  CalendarDays,
+  ClipboardList,
+  Globe,
+  MapPin,
+  Star,
+  Target,
+  TrendingUp,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Download,
+  Upload,
+  GraduationCap,
+  BookOpen,
+  CheckCircle2,
+  Clock3,
+  UserRound,
 } from 'lucide-react';
 import { loadData } from './lib/supabase';
+import type {
+  AppData,
+  CompanyRecord,
+  ProfileField,
+  ProficiencyLevelRecord,
+  SkillRequirementRecord,
+  SkillSetRecord,
+  SkillTopicRecord,
+  SkillWithDetails,
+} from './types';
 
-function externalUrl(value: any): string | null {
+type AppTab = 'companies' | 'skills' | 'tracker' | 'prep';
+type AppView = AppTab | 'privacy' | 'terms';
+
+type StudentProfile = {
+  name: string;
+  graduationYear: string;
+  targetRole: string;
+  careerTrack: string;
+  weeklyHours: number;
+};
+
+type PrepTask = {
+  id: string;
+  skillName: string;
+  title: string;
+  detail: string;
+};
+
+type TrackerStatus =
+  | 'Not tracked' | 'Interested' | 'Researching' | 'Applied'
+  | 'Assessment' | 'Interview' | 'Offer' | 'Rejected' | 'Not pursuing';
+
+type CompanyTrackerEntry = {
+  saved: boolean;
+  status: TrackerStatus;
+  notes: string;
+  followUpDate: string;
+  updatedAt: string;
+};
+type TrackerStore = Record<string, CompanyTrackerEntry>;
+
+const TRACKER_STORAGE_KEY = 'jssu-placement-tracker-v1';
+const TRACKER_STATUSES: TrackerStatus[] = [
+  'Not tracked', 'Interested', 'Researching', 'Applied',
+  'Assessment', 'Interview', 'Offer', 'Rejected', 'Not pursuing',
+];
+const EMPTY_TRACKER_ENTRY: CompanyTrackerEntry = {
+  saved: false, status: 'Not tracked', notes: '', followUpDate: '', updatedAt: '',
+};
+
+const STUDENT_PROFILE_STORAGE_KEY = 'jssu-student-profile-v1';
+const SKILL_RATINGS_STORAGE_KEY = 'jssu-skill-ratings-v1';
+const PREP_CHECKLIST_STORAGE_KEY = 'jssu-prep-checklist-v1';
+
+const DEFAULT_STUDENT_PROFILE: StudentProfile = {
+  name: '',
+  graduationYear: '',
+  targetRole: '',
+  careerTrack: 'Software Development',
+  weeklyHours: 6,
+};
+
+const CAREER_TRACKS = [
+  'Software Development',
+  'AI / Machine Learning',
+  'Data Analytics',
+  'Cybersecurity',
+  'Cloud / DevOps',
+  'Product / Business',
+  'Other',
+];
+
+function readStudentProfile(): StudentProfile {
+  if (typeof window === 'undefined') return DEFAULT_STUDENT_PROFILE;
+  try {
+    const raw = window.localStorage.getItem(STUDENT_PROFILE_STORAGE_KEY);
+    if (!raw) return DEFAULT_STUDENT_PROFILE;
+    const parsed = JSON.parse(raw) as Partial<StudentProfile>;
+    const hours = Number(parsed.weeklyHours);
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name : '',
+      graduationYear: typeof parsed.graduationYear === 'string' ? parsed.graduationYear : '',
+      targetRole: typeof parsed.targetRole === 'string' ? parsed.targetRole : '',
+      careerTrack: typeof parsed.careerTrack === 'string' && CAREER_TRACKS.includes(parsed.careerTrack)
+        ? parsed.careerTrack
+        : DEFAULT_STUDENT_PROFILE.careerTrack,
+      weeklyHours: Number.isFinite(hours) ? Math.min(20, Math.max(1, Math.round(hours))) : DEFAULT_STUDENT_PROFILE.weeklyHours,
+    };
+  } catch {
+    return DEFAULT_STUDENT_PROFILE;
+  }
+}
+
+function readSkillRatings(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(SKILL_RATINGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const clean: Record<string, number> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      const rating = Number(value);
+      if (Number.isInteger(rating) && rating >= 1 && rating <= 5) clean[id] = rating;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+function readPrepChecklist(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PREP_CHECKLIST_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const clean: Record<string, boolean> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === 'boolean') clean[id] = value;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+function readTrackerStore(): TrackerStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(TRACKER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, Partial<CompanyTrackerEntry>>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const clean: TrackerStore = {};
+    for (const [id, item] of Object.entries(parsed)) {
+      if (!item || typeof item !== 'object') continue;
+      clean[id] = {
+        ...EMPTY_TRACKER_ENTRY,
+        saved: Boolean(item.saved),
+        status: TRACKER_STATUSES.includes(item.status as TrackerStatus) ? item.status as TrackerStatus : 'Not tracked',
+        notes: typeof item.notes === 'string' ? item.notes : '',
+        followUpDate: typeof item.followUpDate === 'string' ? item.followUpDate : '',
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+      };
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+function isTrackedEntry(item: CompanyTrackerEntry): boolean {
+  return item.saved || item.status !== 'Not tracked' || Boolean(item.notes.trim()) || Boolean(item.followUpDate);
+}
+
+function findValueByKey(value: unknown, pattern: RegExp, depth = 0): unknown {
+  if (depth > 7 || !value || typeof value !== 'object') return null;
+  for (const [key, child] of Object.entries(value)) {
+    if (pattern.test(key) && (typeof child === 'string' || typeof child === 'number')) {
+      const candidate = String(child).trim();
+      if (candidate && !/^n\/?a$/i.test(candidate)) return child;
+    }
+    if (child && typeof child === 'object') {
+      const found = findValueByKey(child, pattern, depth + 1);
+      if (found !== null && found !== undefined) return found;
+    }
+  }
+  return null;
+}
+
+function socialUrl(value: unknown, platform: 'x' | 'generic' = 'generic'): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (platform === 'x' && /^@[\w]+$/.test(raw)) return 'https://x.com/' + raw.slice(1);
+  return externalUrl(raw);
+}
+
+type HashRoute = {
+  tab: AppView;
+  companyId: string | null;
+};
+
+function readHashRoute(hash?: string): HashRoute {
+  const value = (hash ?? (typeof window === 'undefined' ? '' : window.location.hash)).replace(/^#/, '');
+
+  if (value === 'privacy' || value === 'terms') {
+    return { tab: value, companyId: null };
+  }
+
+  const params = new URLSearchParams(value);
+  const requestedTab = params.get('tab');
+  const tab: AppTab = requestedTab === 'skills'
+    ? 'skills'
+    : requestedTab === 'tracker'
+      ? 'tracker'
+      : requestedTab === 'prep'
+        ? 'prep'
+        : 'companies';
+
+  return {
+    tab,
+    companyId: params.get('company'),
+  };
+}
+
+function appHash(tab: AppTab, companyId: number | null): string {
+  if (companyId === null) return '#tab=' + tab;
+  return '#company=' + encodeURIComponent(String(companyId)) + '&tab=' + tab;
+}
+
+function replaceHash(hash: string): void {
+  if (typeof window === 'undefined' || window.location.hash === hash) return;
+  window.history.replaceState(
+    window.history.state,
+    '',
+    window.location.pathname + window.location.search + hash,
+  );
+}
+
+function externalUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const input = value.trim();
   if (!input || /\s/.test(input)) return null;
@@ -32,7 +268,7 @@ function externalUrl(value: any): string | null {
   }
 }
 
-function findLinkedInUrl(value: any, depth = 0): string | null {
+function findLinkedInUrl(value: unknown, depth = 0): string | null {
   if (depth > 6 || !value || typeof value !== 'object') return null;
 
   for (const [key, child] of Object.entries(value)) {
@@ -51,33 +287,60 @@ function findLinkedInUrl(value: any, depth = 0): string | null {
   return null;
 }
 
-function categoryOf(company: any): string {
-  return String(company.category || company.nature_of_company || 'Other');
+function categoryOf(company: CompanyRecord): string {
+  const category = typeof company.category === 'string' ? company.category.trim() : '';
+  const nature = typeof company.nature_of_company === 'string' ? company.nature_of_company.trim() : '';
+  return category || nature || 'Not available';
+}
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined) return 'Not available';
+  if (typeof value === 'string') return value.trim() || 'Not available';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return 'Not available';
+}
+
+function hasValue(value: unknown): boolean {
+  return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
+function routeCompany(companies: CompanyRecord[], routeId: string | null): CompanyRecord | null {
+  if (routeId !== null) {
+    const match = companies.find((company) => String(company.company_id) === routeId);
+    if (match) return match;
+  }
+  return companies[0] ?? null;
 }
 
 export default function App() {
-  const [data, setData] = useState<any>(null);
-  const [err, setErr] = useState('');
+  const [data, setData] = useState<AppData | null>(null);
+  const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(true);
   const [q, setQ] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
-  const [tab, setTab] = useState('companies');
+  const [tab, setTab] = useState<AppView>(() => readHashRoute().tab);
+  const [tracker, setTracker] = useState<TrackerStore>(() => readTrackerStore());
+  const [studentProfile, setStudentProfile] = useState<StudentProfile>(() => readStudentProfile());
+  const [skillRatings, setSkillRatings] = useState<Record<string, number>>(() => readSkillRatings());
+  const [prepChecklist, setPrepChecklist] = useState<Record<string, boolean>>(() => readPrepChecklist());
+  const [directoryMode, setDirectoryMode] = useState<'all' | 'saved' | 'tracked'>('all');
+  const [skillQuery, setSkillQuery] = useState('');
+  const [requiredOnly, setRequiredOnly] = useState(false);
+  const [comparisonIds, setComparisonIds] = useState<number[]>([]);
 
   async function refresh() {
     setBusy(true);
-    setErr('');
+    setErr(false);
     try {
       const result = await loadData();
       setData(result);
       setPage(1);
-      if (selected === null && result.companies.length) {
-        setSelected(result.companies[0].company_id);
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Database request failed');
+    } catch (error) {
+      console.error('Could not load company data.', error);
+      setErr(true);
     } finally {
       setBusy(false);
     }
@@ -87,22 +350,92 @@ export default function App() {
     void refresh();
   }, []);
 
-  const allCompanies = data?.companies || [];
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TRACKER_STORAGE_KEY, JSON.stringify(tracker));
+    } catch {
+      // Keep the dashboard functional when browser storage is disabled or full.
+    }
+  }, [tracker]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STUDENT_PROFILE_STORAGE_KEY, JSON.stringify(studentProfile));
+    } catch {
+      // Keep the profile available in the current session when storage is unavailable.
+    }
+  }, [studentProfile]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SKILL_RATINGS_STORAGE_KEY, JSON.stringify(skillRatings));
+    } catch {
+      // Keep self-assessment usable in the current session when storage is unavailable.
+    }
+  }, [skillRatings]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PREP_CHECKLIST_STORAGE_KEY, JSON.stringify(prepChecklist));
+    } catch {
+      // Keep checklist updates available in the current session when storage is unavailable.
+    }
+  }, [prepChecklist]);
+
+  useEffect(() => {
+    function syncFromHash() {
+      const route = readHashRoute();
+      setTab(route.tab);
+
+      if (route.tab === 'privacy' || route.tab === 'terms') return;
+
+      if (!data) {
+        if (route.companyId !== null) {
+          const parsedId = Number(route.companyId);
+          setSelected(Number.isFinite(parsedId) ? parsedId : null);
+        }
+        return;
+      }
+
+      const company = routeCompany(data.companies || [], route.companyId);
+      setSelected(company ? company.company_id : null);
+      const normalizedHash = appHash(route.tab, company ? company.company_id : null);
+      replaceHash(normalizedHash);
+    }
+
+    window.addEventListener('hashchange', syncFromHash);
+    syncFromHash();
+    return () => window.removeEventListener('hashchange', syncFromHash);
+  }, [data]);
+
+  const allCompanies: CompanyRecord[] = data?.companies || [];
   const categories = Array.from(
-    new Set<string>(allCompanies.map((company: any) => categoryOf(company))),
+    new Set<string>(allCompanies.map((company) => categoryOf(company))),
   ).sort((a: string, b: string) => a.localeCompare(b));
   const needle = q.trim().toLowerCase();
-  const companies = allCompanies.filter((company: any) => {
+  const companies = allCompanies.filter((company) => {
     const searchable = [
       company.name,
       company.short_name,
       company.category,
       company.nature_of_company,
       company.headquarters_address,
-    ].filter(Boolean).join(' ').toLowerCase();
+    ]
+      .filter((value) => hasValue(value))
+      .join(' ')
+      .toLowerCase();
 
-    return searchable.includes(needle) &&
-      (categoryFilter === 'all' || categoryOf(company) === categoryFilter);
+    const savedProfile = (data?.profiles || []).find((item) => String(item.company_id) === String(company.company_id));
+    const extendedSearch = [
+      ...Object.values(savedProfile?.short_json || {}),
+      ...Object.values(savedProfile?.full_json || {}),
+    ].filter((value) => typeof value === 'string').join(' ').toLowerCase();
+    const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
+    return (searchable + ' ' + extendedSearch).includes(needle) &&
+      (categoryFilter === 'all' || categoryOf(company) === categoryFilter) &&
+      (directoryMode === 'all' ||
+        (directoryMode === 'saved' && item.saved) ||
+        (directoryMode === 'tracked' && isTrackedEntry(item)));
   });
 
   const totalPages = Math.max(1, Math.ceil(companies.length / pageSize));
@@ -112,9 +445,11 @@ export default function App() {
   const rangeStart = companies.length ? startIndex + 1 : 0;
   const rangeEnd = Math.min(startIndex + pageSize, companies.length);
 
-  const current = allCompanies.find((company: any) => company.company_id === selected);
-  const profile = (data?.profiles || []).find((item: any) => item.company_id === selected);
-  const full = {
+  const current = allCompanies.find((company) => String(company.company_id) === String(selected));
+  const profile = (data?.profiles || []).find(
+    (item) => String(item.company_id) === String(selected),
+  );
+  const full: Record<string, unknown> = {
     ...(profile?.short_json || {}),
     ...(profile?.full_json || {}),
     ...(current || {}),
@@ -122,28 +457,376 @@ export default function App() {
   const websiteUrl = externalUrl(current?.website_url);
   const linkedinUrl = findLinkedInUrl(full);
 
-  const requirements = (data?.requirements || []).filter(
-    (item: any) => item.company_id === selected,
+  const requirements: SkillRequirementRecord[] = (data?.requirements || []).filter(
+    (item) => String(item.company_id) === String(selected),
   );
-  const skills = (data?.skills || []).map((skill: any) => ({
-    ...skill,
-    req: requirements.find((item: any) => item.skill_set_id === skill.skill_set_id),
-    topics: (data?.topics || []).filter(
-      (topic: any) => topic.skill_set_id === skill.skill_set_id,
-    ),
-  }));
+  const skills: SkillWithDetails[] = (data?.skills || [])
+    .map((skill: SkillSetRecord) => {
+      const requirement = requirements.find(
+        (item) => String(item.skill_set_id) === String(skill.skill_set_id),
+      );
+      const proficiency = requirement
+        ? (data?.proficiency || []).find(
+            (item: ProficiencyLevelRecord) =>
+              String(item.proficiency_level_id) ===
+              String(requirement.required_proficiency_level_id),
+          )
+        : undefined;
+      return {
+        ...skill,
+        req: requirement,
+        proficiency,
+        topics: (data?.topics || []).filter(
+          (topic: SkillTopicRecord) => String(topic.skill_set_id) === String(skill.skill_set_id),
+        ),
+      };
+    })
+    .sort((a, b) => {
+      const levelA = a.req?.required_level;
+      const levelB = b.req?.required_level;
+      const hasLevelA = hasValue(levelA) && Number.isFinite(Number(levelA));
+      const hasLevelB = hasValue(levelB) && Number.isFinite(Number(levelB));
 
-  const profileFields: any[] = current
+      if (hasLevelA && hasLevelB) return Number(levelB) - Number(levelA);
+      if (hasLevelA) return -1;
+      if (hasLevelB) return 1;
+      return displayValue(a.skill_set_name).localeCompare(displayValue(b.skill_set_name));
+    });
+
+  const entry = current ? tracker[String(current.company_id)] || EMPTY_TRACKER_ENTRY : EMPTY_TRACKER_ENTRY;
+  const logoUrl = socialUrl(full.logo_url);
+  const xUrl = socialUrl(full.twitter_url || full.x_url || full.twitter_handle, 'x');
+  const instagramUrl = socialUrl(findValueByKey(full, /instagram.*url/i));
+  const facebookUrl = socialUrl(findValueByKey(full, /facebook.*url/i));
+  const youtubeUrl = socialUrl(findValueByKey(full, /youtube.*url|youtube_channel/i));
+  const careerUrl = socialUrl(findValueByKey(full, /career.*url|job.*portal.*url|recruitment.*url/i));
+  const profileLinks = [
+    ...(websiteUrl ? [{ label: 'Official website', href: websiteUrl }] : []),
+    ...(linkedinUrl ? [{ label: 'LinkedIn', href: linkedinUrl }] : []),
+    ...(instagramUrl ? [{ label: 'Instagram', href: instagramUrl }] : []),
+    ...(facebookUrl ? [{ label: 'Facebook', href: facebookUrl }] : []),
+    ...(xUrl ? [{ label: 'X / Twitter', href: xUrl }] : []),
+    ...(youtubeUrl ? [{ label: 'YouTube', href: youtubeUrl }] : []),
+    ...(careerUrl ? [{ label: 'Careers page', href: careerUrl }] : []),
+    ...(current?.name ? [{ label: 'Find jobs', href: 'https://www.linkedin.com/jobs/search/?keywords=' + encodeURIComponent(current.name) }] : []),
+    ...(current?.name ? [{ label: 'Search internships', href: 'https://www.google.com/search?q=' + encodeURIComponent(current.name + ' internships careers') }] : []),
+  ];
+  const signalFields = ([
+    ['CEO / leadership', full.ceo_name || full.key_leaders],
+    ['Technology stack', full.tech_stack],
+    ['Focus sectors', full.focus_sectors],
+    ['Hiring velocity', full.hiring_velocity],
+    ['Learning culture', full.learning_culture || full.training_spend],
+    ['Work culture', full.work_culture_summary || full.core_values],
+    ['Recent news', full.recent_news],
+    ['Key competitors', full.key_competitors],
+    ['Growth signal', full.yoy_growth_rate],
+  ] as [string, unknown][]).filter((item) => hasValue(item[1]));
+  const profileFields: ProfileField[] = current
     ? [
-        ['Category', current.category, null],
-        ['Founded', current.incorporation_year, null],
-        ['Company type', current.nature_of_company, null],
-        ['Vision', full.vision_statement, null],
-        ['Mission', full.mission_statement, null],
-        ['Website', current.website_url, websiteUrl],
-        ...(linkedinUrl ? [['LinkedIn', 'View company profile', linkedinUrl]] : []),
+        { label: 'Category', value: current.category },
+        { label: 'Company type', value: current.nature_of_company },
+        { label: 'Founded', value: current.incorporation_year },
+        { label: 'Vision', value: full.vision_statement },
+        { label: 'Mission', value: full.mission_statement },
+        { label: 'Headquarters', value: current.headquarters_address },
+        { label: 'Website', value: current.website_url, href: websiteUrl },
+        ...(linkedinUrl ? [{ label: 'LinkedIn', value: 'View company profile', href: linkedinUrl }] : []),
       ]
     : [];
+
+  const trackedCompanies = allCompanies.filter((company) => isTrackedEntry(tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY));
+  const savedCount = allCompanies.filter((company) => (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).saved).length;
+  const activeCount = trackedCompanies.filter((company) =>
+    ['Applied', 'Assessment', 'Interview', 'Offer'].includes((tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status),
+  ).length;
+  const now = new Date();
+  const todayKey = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
+  const followUpsDue = trackedCompanies.filter((company) => {
+    const date = (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).followUpDate;
+    return Boolean(date) && date <= todayKey;
+  });
+  const visibleSkills = skills.filter((skill) => {
+    const text = [skill.skill_set_name, skill.short_name, skill.skill_set_description, ...skill.topics.map((topic) => topic.topics || '')].join(' ').toLowerCase();
+    return text.includes(skillQuery.trim().toLowerCase()) && (!requiredOnly || Boolean(skill.req));
+  });
+
+  function updateTracker(companyId: number, patch: Partial<CompanyTrackerEntry>) {
+    const id = String(companyId);
+    setTracker((previous) => ({
+      ...previous,
+      [id]: { ...EMPTY_TRACKER_ENTRY, ...(previous[id] || {}), ...patch, updatedAt: new Date().toISOString() },
+    }));
+  }
+
+  function toggleSaved(companyId: number) {
+    const item = tracker[String(companyId)] || EMPTY_TRACKER_ENTRY;
+    updateTracker(companyId, { saved: !item.saved });
+  }
+
+  function toggleComparison(companyId: number) {
+    setComparisonIds((previous) => previous.includes(companyId)
+      ? previous.filter((id) => id !== companyId)
+      : previous.length < 3 ? [...previous, companyId] : previous);
+  }
+
+  function csvCell(value: unknown): string {
+    const input = String(value ?? '');
+    // Prevent spreadsheet applications from evaluating user-entered text as a formula.
+    const safe = /^[=+@]/.test(input) || input.startsWith('-') || input.startsWith('\t') || input.startsWith('\r') ? "'" + input : input;
+    return '"' + safe.replace(/"/g, '""') + '"';
+  }
+
+  function downloadTextFile(filename: string, content: string, mimeType: string) {
+    const url = URL.createObjectURL(new Blob([content], { type: mimeType }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function exportTrackerCsv() {
+    const rows = trackedCompanies.map((company) => {
+      const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
+      return [company.company_id, company.name || '', categoryOf(company), item.status, item.saved ? 'Yes' : 'No', item.followUpDate, item.notes];
+    });
+    const csv = [
+      ['Company ID', 'Company', 'Category', 'Status', 'Saved', 'Follow-up date', 'Notes'],
+      ...rows,
+    ].map((row) => row.map(csvCell).join(',')).join('\r\n');
+    downloadTextFile('jssu-placement-tracker.csv', '\ufeff' + csv, 'text/csv;charset=utf-8;');
+  }
+
+  function exportPrepPlanCsv() {
+    const rows: unknown[][] = [
+      ['Record type', 'Name / task', 'Skill', 'Rating (1-5)', 'Company target (10-point scale)', 'Status', 'Details'],
+      ['Profile', 'Career track', '', '', '', '', studentProfile.careerTrack],
+      ['Profile', 'Target role', '', '', '', '', studentProfile.targetRole],
+      ['Profile', 'Graduation year', '', '', '', '', studentProfile.graduationYear],
+      ['Profile', 'Weekly study hours', '', '', '', '', studentProfile.weeklyHours],
+      ...skills.map((skill) => {
+        const rating = skillRatings[String(skill.skill_set_id)] || '';
+        const target = skill.req && hasValue(skill.req.required_level) && Number.isFinite(Number(skill.req.required_level))
+          ? Number(skill.req.required_level)
+          : '';
+        const status = rating === ''
+          ? 'Not assessed'
+          : target === ''
+            ? 'Self-assessment only'
+            : Number(rating) * 2 < Number(target)
+              ? 'Below available target'
+              : 'At or above available target';
+        return ['Skill', displayValue(skill.skill_set_name), displayValue(skill.skill_set_name), rating, target, status, displayValue(skill.skill_set_description)];
+      }),
+      ...prepTasks.map((task) => [
+        'Weekly task',
+        task.title,
+        task.skillName,
+        skillRatings[String(skills.find((skill) => displayValue(skill.skill_set_name) === task.skillName)?.skill_set_id)] || '',
+        '',
+        prepChecklist[task.id] ? 'Complete' : 'Pending',
+        task.detail,
+      ]),
+    ];
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+    downloadTextFile('jssu-prep-plan.csv', '\ufeff' + csv, 'text/csv;charset=utf-8;');
+  }
+
+  function exportWorkspaceBackup() {
+    const payload = {
+      schemaVersion: 1,
+      exportedAt: new Date().toISOString(),
+      description: 'JSSU Placement Intelligence Hub local-only workspace backup',
+      data: { tracker, studentProfile, skillRatings, prepChecklist },
+    };
+    downloadTextFile(
+      'jssu-placement-workspace-backup.json',
+      JSON.stringify(payload, null, 2),
+      'application/json;charset=utf-8;',
+    );
+  }
+
+  async function importWorkspaceBackup(file?: File) {
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('The backup file is not a JSON object.');
+      }
+      const envelope = parsed as Record<string, unknown>;
+      if (envelope.schemaVersion !== 1 || !envelope.data || typeof envelope.data !== 'object' || Array.isArray(envelope.data)) {
+        throw new Error('This backup format is not supported.');
+      }
+      const payload = envelope.data as Record<string, unknown>;
+      for (const key of ['tracker', 'studentProfile', 'skillRatings', 'prepChecklist']) {
+        if (!payload[key] || typeof payload[key] !== 'object' || Array.isArray(payload[key])) {
+          throw new Error('The backup is missing valid ' + key + ' data.');
+        }
+      }
+
+      const rawProfile = payload.studentProfile as Record<string, unknown>;
+      const rawHours = Number(rawProfile.weeklyHours);
+      const safeProfile: StudentProfile = {
+        name: typeof rawProfile.name === 'string' ? rawProfile.name.slice(0, 120) : '',
+        graduationYear: typeof rawProfile.graduationYear === 'string' && /^\d{4}$/.test(rawProfile.graduationYear) ? rawProfile.graduationYear : '',
+        targetRole: typeof rawProfile.targetRole === 'string' ? rawProfile.targetRole.slice(0, 160) : '',
+        careerTrack: typeof rawProfile.careerTrack === 'string' && CAREER_TRACKS.includes(rawProfile.careerTrack) ? rawProfile.careerTrack : DEFAULT_STUDENT_PROFILE.careerTrack,
+        weeklyHours: Number.isFinite(rawHours) ? Math.min(20, Math.max(1, Math.round(rawHours))) : DEFAULT_STUDENT_PROFILE.weeklyHours,
+      };
+
+      const safeTracker: TrackerStore = {};
+      const rawTracker = payload.tracker as Record<string, unknown>;
+      for (const [id, value] of Object.entries(rawTracker)) {
+        if (!/^\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+        const item = value as Record<string, unknown>;
+        safeTracker[id] = {
+          saved: Boolean(item.saved),
+          status: TRACKER_STATUSES.includes(item.status as TrackerStatus) ? item.status as TrackerStatus : 'Not tracked',
+          notes: typeof item.notes === 'string' ? item.notes.slice(0, 10000) : '',
+          followUpDate: typeof item.followUpDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.followUpDate) ? item.followUpDate : '',
+          updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt.slice(0, 64) : '',
+        };
+      }
+
+      const safeRatings: Record<string, number> = {};
+      for (const [id, value] of Object.entries(payload.skillRatings as Record<string, unknown>)) {
+        const rating = Number(value);
+        if (/^\d+$/.test(id) && Number.isInteger(rating) && rating >= 1 && rating <= 5) safeRatings[id] = rating;
+      }
+
+      const safeChecklist: Record<string, boolean> = {};
+      for (const [id, value] of Object.entries(payload.prepChecklist as Record<string, unknown>)) {
+        if (typeof id === 'string' && id.length <= 300 && typeof value === 'boolean') safeChecklist[id] = value;
+      }
+
+      if (!window.confirm('Restore this backup? It will replace the tracker, student profile, skill ratings and checklist currently stored in this browser.')) return;
+      setTracker(safeTracker);
+      setStudentProfile(safeProfile);
+      setSkillRatings(safeRatings);
+      setPrepChecklist(safeChecklist);
+      window.alert('Workspace backup restored successfully.');
+    } catch (error) {
+      console.error('Workspace backup could not be restored.', error);
+      window.alert(error instanceof Error ? 'Could not restore backup: ' + error.message : 'Could not restore this backup file.');
+    }
+  }
+
+  function companyLogo(companyId: number): string | null {
+    const item = (data?.profiles || []).find((profileItem) => String(profileItem.company_id) === String(companyId));
+    return socialUrl(item?.full_json?.logo_url || item?.short_json?.logo_url);
+  }
+
+  function writeRoute(hash: string) {
+    if (window.location.hash !== hash) window.location.hash = hash.slice(1);
+  }
+
+  function navigateToAppTab(nextTab: AppTab) {
+    const fallbackCompany = allCompanies.find(
+      (company) => String(company.company_id) === String(selected),
+    ) || allCompanies[0] || null;
+    const companyId = fallbackCompany ? fallbackCompany.company_id : null;
+
+    setTab(nextTab);
+    setSelected(companyId);
+    writeRoute(appHash(nextTab, companyId));
+  }
+
+  function navigateToStaticPage(nextTab: 'privacy' | 'terms') {
+    setTab(nextTab);
+    writeRoute('#' + nextTab);
+  }
+
+  function selectCompany(companyId: number, nextTab: AppTab, scrollToProfile: boolean) {
+    setSelected(companyId);
+    setTab(nextTab);
+    writeRoute(appHash(nextTab, companyId));
+
+    if (
+      scrollToProfile &&
+      window.matchMedia('(max-width: 780px)').matches
+    ) {
+      const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : 'smooth';
+      window.requestAnimationFrame(() => {
+        document.getElementById('company-profile')?.scrollIntoView({
+          behavior,
+          block: 'start',
+        });
+      });
+    }
+  }
+
+  const selectedForSkills = current ? String(current.company_id) : '';
+
+  const ratedSkillCount = skills.filter((skill) => (skillRatings[String(skill.skill_set_id)] || 0) > 0).length;
+  const prepSkillAnalysis = skills.map((skill) => {
+    const rating = skillRatings[String(skill.skill_set_id)] || 0;
+    const rawTarget = skill.req?.required_level;
+    const targetLevel = skill.req && hasValue(rawTarget) && Number.isFinite(Number(rawTarget))
+      ? Number(rawTarget)
+      : null;
+    const gap = targetLevel === null ? null : Math.max(0, targetLevel - rating * 2);
+    const priorityScore = rating > 0
+      ? gap !== null
+        ? gap
+        : rating <= 2
+          ? 6 - rating
+          : 0
+      : 0;
+    return { skill, rating, targetLevel, gap, priorityScore };
+  }).filter((item) => item.priorityScore > 0)
+    .sort((a, b) => b.priorityScore - a.priorityScore || a.rating - b.rating);
+  const prepPriorities = prepSkillAnalysis.slice(0, 3);
+  const prepTasks: PrepTask[] = prepPriorities.flatMap((item) => {
+    const sortedTopics = item.skill.topics.slice().sort((a, b) => {
+      const levelA = Number(a.level_number);
+      const levelB = Number(b.level_number);
+      if (Number.isFinite(levelA) && Number.isFinite(levelB)) return levelA - levelB;
+      return displayValue(a.topics).localeCompare(displayValue(b.topics));
+    });
+    const nextTopics = sortedTopics.filter((topic) => {
+      const level = Number(topic.level_number);
+      return Number.isFinite(level) && level > item.rating;
+    }).slice(0, 2);
+    if (nextTopics.length === 0) {
+      return [{
+        id: 'skill-' + item.skill.skill_set_id + '-practice',
+        skillName: displayValue(item.skill.skill_set_name),
+        title: 'Build a small project using ' + displayValue(item.skill.skill_set_name),
+        detail: 'Create one working example, write down what you learned, and keep the code in your portfolio.',
+      }];
+    }
+    return nextTopics.map((topic, index) => ({
+      id: 'skill-' + item.skill.skill_set_id + '-topic-' + String(topic.level_number) + '-' + index,
+      skillName: displayValue(item.skill.skill_set_name),
+      title: 'Study: ' + displayValue(topic.topics),
+      detail: 'Practice the concept with a small example, then explain it in your own words.',
+    }));
+  });
+  const prepDoneCount = prepTasks.filter((task) => Boolean(prepChecklist[task.id])).length;
+  const prepProgress = prepTasks.length > 0 ? Math.round((prepDoneCount / prepTasks.length) * 100) : 0;
+  const companyRequirementCount = skills.filter((skill) => skill.req && hasValue(skill.req.required_level)).length;
+
+  function updateStudentProfile(patch: Partial<StudentProfile>) {
+    setStudentProfile((previous) => ({ ...previous, ...patch }));
+  }
+
+  function updateSkillRating(skillId: number, rawValue: string) {
+    const nextValue = Number(rawValue);
+    setSkillRatings((previous) => {
+      const updated = { ...previous };
+      if (Number.isInteger(nextValue) && nextValue >= 1 && nextValue <= 5) {
+        updated[String(skillId)] = nextValue;
+      } else {
+        delete updated[String(skillId)];
+      }
+      return updated;
+    });
+  }
 
   return (
     <div className="shell">
@@ -152,27 +835,44 @@ export default function App() {
           <span>J</span>
           <div>
             <b>JSSU</b>
-            <small>Placement Intelligence</small>
+            <small>Placement Intelligence Hub</small>
           </div>
         </div>
         <p className="label">WORKSPACE</p>
         <button
           className={tab === 'companies' ? 'nav active' : 'nav'}
-          onClick={() => setTab('companies')}
+          aria-current={tab === 'companies' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('companies')}
         >
           <Building2 size={17} /> Company directory
         </button>
         <button
           className={tab === 'skills' ? 'nav active' : 'nav'}
-          onClick={() => setTab('skills')}
+          aria-current={tab === 'skills' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('skills')}
         >
           <BrainCircuit size={17} /> Skill intelligence
+        </button>
+        <button
+          className={tab === 'tracker' ? 'nav active' : 'nav'}
+          aria-current={tab === 'tracker' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('tracker')}
+        >
+          <ClipboardList size={17} /> My tracker
+          {trackedCompanies.length > 0 && <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 800 }}>{trackedCompanies.length}</span>}
+        </button>
+        <button
+          className={tab === 'prep' ? 'nav active' : 'nav'}
+          aria-current={tab === 'prep' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('prep')}
+        >
+          <GraduationCap size={17} /> Prep plan
         </button>
         <div className="connection">
           <i style={{ background: data ? '#19a66a' : '#e7a23b' }} />
           <div>
-            <b>Supabase</b>
-            <small>{data ? 'Connected · read-only' : 'Connection status'}</small>
+            <b>Company data</b>
+            <small>{data ? 'Company information available' : 'Company directory'}</small>
           </div>
         </div>
       </aside>
@@ -180,27 +880,135 @@ export default function App() {
       <main>
         <header>
           <div>
-            <span className="eyebrow">JSS UNIVERSITY, NOIDA / BOOTCAMP</span>
-            <h1>{tab === 'companies' ? 'Company directory' : 'Skill intelligence'}</h1>
+            <span className="eyebrow">JSS UNIVERSITY, NOIDA</span>
+            <h1>
+              {tab === 'companies'
+                ? 'Company directory'
+                : tab === 'skills'
+                  ? 'Skill intelligence'
+                  : tab === 'tracker'
+                    ? 'Company tracker'
+                    : tab === 'prep'
+                      ? 'My prep plan'
+                      : tab === 'privacy'
+                        ? 'Privacy'
+                        : 'Terms'}
+            </h1>
           </div>
-          <button className="refresh" onClick={() => void refresh()} disabled={busy}>
+          <button
+            className="refresh"
+            onClick={() => void refresh()}
+            disabled={busy}
+            aria-label="Refresh data"
+          >
             <RefreshCw size={15} /> Refresh
           </button>
         </header>
 
         {err && (
-          <div className="alert">
+          <div className="alert" role="alert">
             <AlertCircle size={18} />
             <div>
-              <b>Could not load live data</b>
-              <p>{err}</p>
-              <small>Check .env.local and Supabase SELECT policies.</small>
+              <b>Could not load company data. Please try again.</b>
+              <button
+                type="button"
+                className="page-button"
+                onClick={() => void refresh()}
+                disabled={busy}
+              >
+                Retry
+              </button>
             </div>
           </div>
         )}
 
-        {busy ? (
-          <div className="loading">Connecting to your Supabase project…</div>
+        {!busy && data && tab !== 'privacy' && tab !== 'terms' && (
+          <section className="stats" aria-label="Workspace summary" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+            {tab === 'prep' ? (
+              <>
+                <div><small>Skills rated</small><b>{ratedSkillCount}/{skills.length}</b></div>
+                <div><small>Priority skills</small><b>{prepPriorities.length}</b></div>
+                <div><small>Weekly hours</small><b>{studentProfile.weeklyHours}h</b></div>
+                <div><small>Plan progress</small><b>{prepDoneCount}/{prepTasks.length}</b></div>
+              </>
+            ) : (
+              <>
+                <div><small>Companies</small><b>{allCompanies.length}</b></div>
+                <div><small>Saved</small><b>{savedCount}</b></div>
+                <div><small>In progress</small><b>{activeCount}</b></div>
+                <div><small>Follow-ups due</small><b>{followUpsDue.length}</b></div>
+              </>
+            )}
+          </section>
+        )}
+        {data?.warnings && data.warnings.length > 0 && tab !== 'privacy' && tab !== 'terms' && (
+          <div className="note" role="status" style={{ marginBottom: 16, marginTop: 0 }}>
+            <Database size={15} /> Some optional datasets could not be loaded: {data.warnings.slice(0, 3).join(', ')}{data.warnings.length > 3 ? ' and ' + (data.warnings.length - 3) + ' more' : ''}. Company browsing remains available.
+          </div>
+        )}
+
+        {tab === 'privacy' ? (
+          <section className="panel">
+            <div className="details">
+              <h3>Privacy</h3>
+              <p>
+                JSSU Placement Intelligence Hub presents read-only public company information,
+                company profiles, skill requirements, and topic information from its configured dataset.
+                Values that are not present in the dataset are shown as unavailable.
+              </p>
+              <p>
+                This application does not provide visitor accounts or sign-in. Saved companies,
+                application stages, follow-up dates, notes, your optional student profile, skill ratings
+                and checklist progress are stored in this browser and are not synced to an account or
+                database. Avoid entering sensitive personal information.
+                This statement does not make claims about logs or retention practices of the hosting
+                or data providers.
+              </p>
+              <p>
+                The interface loads fonts from Google Fonts. When those fonts are requested, the
+                browser connects to Google to retrieve them. Refer to Google's own documentation
+                for how its services process technical request information.
+              </p>
+              <div className="note">
+                Add the owner's contact email before public release. Tracker information stays in this browser.
+              </div>
+              <p>
+                <a href={appHash('companies', selected ?? (allCompanies[0]?.company_id ?? null))}>
+                  Return to the company directory
+                </a>
+              </p>
+            </div>
+          </section>
+        ) : tab === 'terms' ? (
+          <section className="panel">
+            <div className="details">
+              <h3>Terms</h3>
+              <p>
+                JSSU Placement Intelligence Hub lets visitors browse read-only public company
+                information and skill details available in the configured dataset. Some values may be missing or
+                may change when the source data is updated.
+              </p>
+              <p>
+                Company websites and social profile links, when available, open on external
+                websites. The contents and availability of those external websites are outside this
+                application's interface.
+              </p>
+              <p>
+                Check important company details against the relevant company's own sources before
+                relying on them.
+              </p>
+              <div className="note">
+                TODO: Add the owner's contact email before public release.
+              </div>
+              <p>
+                <a href={appHash('companies', selected ?? (allCompanies[0]?.company_id ?? null))}>
+                  Return to the company directory
+                </a>
+              </p>
+            </div>
+          </section>
+        ) : busy && !data ? (
+          <div className="loading">Loading companies...</div>
         ) : data && tab === 'companies' ? (
           <div className="layout">
             <section className="panel list">
@@ -210,6 +1018,25 @@ export default function App() {
                   <p>{allCompanies.length} total companies</p>
                 </div>
                 <span>{companies.length} results</span>
+              </div>
+
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
+                {([
+                  ['all', 'All companies'],
+                  ['saved', 'Saved'],
+                  ['tracked', 'Tracked'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className="page-button"
+                    aria-pressed={directoryMode === mode}
+                    onClick={() => { setDirectoryMode(mode); setPage(1); }}
+                    style={directoryMode === mode ? { background: '#e4e9de', boxShadow: 'inset 0 0 0 1px #788a79' } : undefined}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
 
               <label className="search">
@@ -238,25 +1065,34 @@ export default function App() {
                 >
                   <option value="all">All categories</option>
                   {categories.map((category: string) => (
-                    <option value={category} key={category}>{category}</option>
+                    <option value={category} key={category}>
+                      {category}
+                    </option>
                   ))}
                 </select>
               </label>
 
               <div className="company-results" aria-live="polite">
-                {visibleCompanies.map((company: any) => (
+                {visibleCompanies.map((company) => (
                   <button
                     className={'company ' + (selected === company.company_id ? 'chosen' : '')}
                     key={company.company_id}
-                    onClick={() => setSelected(company.company_id)}
+                    aria-pressed={selected === company.company_id}
+                    onClick={() => selectCompany(company.company_id, 'companies', true)}
                   >
-                    <b className="mark">
-                      {(company.short_name || company.name || '?').slice(0, 1)}
+                    <b className="mark" style={{ position: 'relative', overflow: 'hidden', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {(company.short_name || company.name || 'J').slice(0, 1)}
+                      {companyLogo(company.company_id) && (
+                        <img src={companyLogo(company.company_id) || undefined} alt="" loading="lazy"
+                          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                          style={{ position: 'absolute', inset: 2, width: 'calc(100% - 4px)', height: 'calc(100% - 4px)', objectFit: 'contain', background: '#fffef9' }} />
+                      )}
                     </b>
                     <span>
-                      <strong>{company.name}</strong>
-                      <small>{company.category || company.nature_of_company || 'Company profile'}</small>
+                      <strong>{displayValue(company.name)}</strong>
+                      <small>{categoryOf(company)}{(tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status !== 'Not tracked' ? ' · ' + (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status : ''}</small>
                     </span>
+                    {(tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).saved && <Star size={14} aria-label="Saved company" fill="currentColor" />}
                   </button>
                 ))}
                 {visibleCompanies.length === 0 && (
@@ -280,7 +1116,9 @@ export default function App() {
 
               <div className="pagination">
                 <div className="pagination-summary">
-                  <span>Showing <b>{rangeStart}–{rangeEnd}</b> of <b>{companies.length}</b></span>
+                  <span>
+                    Showing <b>{rangeStart} to {rangeEnd}</b> of <b>{companies.length}</b>
+                  </span>
                   <label className="page-size">
                     <span>Per page</span>
                     <select
@@ -320,46 +1158,145 @@ export default function App() {
               </div>
             </section>
 
-            <section className="panel profile">
+            <section className="panel profile" id="company-profile">
               {current ? (
                 <>
                   <div className="profile-head">
-                    <b className="mark big">
-                      {(current.short_name || current.name || '?').slice(0, 1)}
+                    <b className="mark big" style={{ position: 'relative', overflow: 'hidden', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      {(current.short_name || current.name || 'J').slice(0, 1)}
+                      {logoUrl && <img src={logoUrl} alt={displayValue(current.name) + ' logo'}
+                        onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                        style={{ position: 'absolute', inset: 3, width: 'calc(100% - 6px)', height: 'calc(100% - 6px)', objectFit: 'contain', background: '#fffef9' }} />}
                     </b>
-                    <div>
-                      <span className="eyebrow">COMPANY PROFILE</span>
-                      <h2>{current.name}</h2>
-                      <p>{current.headquarters_address || 'Headquarters not listed'}</p>
+                    <div style={{ flex: 1 }}>
+                      <span className="eyebrow">COMPANY PROFILE · ID {current.company_id}</span>
+                      <h2>{displayValue(current.name)}</h2>
+                      <p><MapPin size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> {displayValue(current.headquarters_address)}</p>
                     </div>
                   </div>
+                  <div style={{ padding: '12px 22px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, borderBottom: '1px solid #d8dbcf' }}>
+                    <button type="button" className="page-button" onClick={() => toggleSaved(current.company_id)} aria-pressed={entry.saved}>
+                      <Star size={14} fill={entry.saved ? 'currentColor' : 'none'} /> {entry.saved ? 'Saved to shortlist' : 'Save company'}
+                    </button>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, color: '#59665e', fontWeight: 700 }}>
+                      Tracker
+                      <select className="filter-select" value={entry.status}
+                        onChange={(event) => updateTracker(current.company_id, { status: event.target.value as TrackerStatus })}
+                        aria-label="Company tracker status" style={{ width: 'auto', minWidth: 138, padding: '7px 8px' }}>
+                        {TRACKER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    </label>
+                    <button type="button" className="page-button" onClick={() => toggleComparison(current.company_id)} aria-pressed={comparisonIds.includes(current.company_id)}>
+                      <Target size={14} /> {comparisonIds.includes(current.company_id) ? 'Remove comparison' : 'Compare'}
+                    </button>
+                    <button type="button" className="page-button" onClick={() => navigateToAppTab('tracker')}>
+                      <ClipboardList size={14} /> Track & notes
+                    </button>
+                  </div>
                   <div className="stats">
-                    <div><small>Company ID</small><b>{current.company_id}</b></div>
-                    <div><small>Skill requirements</small><b>{requirements.length}</b></div>
-                    <div><small>Skill areas</small><b>{data.skills.length}</b></div>
+                    <div>
+                      <small>Employee size</small>
+                      <b>{displayValue(current.employee_size)}</b>
+                    </div>
+                    <div>
+                      <small>Skill requirements</small>
+                      <b>{requirements.length}</b>
+                    </div>
+                    <div>
+                      <small>Founded</small>
+                      <b>{displayValue(current.incorporation_year)}</b>
+                    </div>
                   </div>
                   <div className="details">
                     <h3>Company overview</h3>
-                    <p>{full.overview_text || full.company_overview || 'No overview provided in the database.'}</p>
-                    {profileFields.map(([label, value, href]) => (
-                      <div className="field" key={String(label)}>
-                        <span>{label}</span>
+                    <p>{displayValue(full.overview_text || full.company_overview)}</p>
+                    {profileFields.map((field) => (
+                      <div className="field" key={field.label}>
+                        <span>{field.label}</span>
                         <b>
-                          {href ? (
+                          {field.href ? (
                             <a
                               className="external-link"
-                              href={href}
+                              href={field.href}
                               target="_blank"
                               rel="noopener noreferrer"
                             >
-                              {value} <ExternalLink size={13} />
+                              {displayValue(field.value)} <ExternalLink size={13} />
                             </a>
-                          ) : value || 'Not available'}
+                          ) : (
+                            displayValue(field.value)
+                          )}
                         </b>
                       </div>
                     ))}
+                    <div style={{ marginTop: 18 }}>
+                      <h3>Company links</h3>
+                      <p style={{ marginBottom: 12 }}>Links from the company profile, alongside clearly labelled job-search shortcuts.</p>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {profileLinks.map((link) => (
+                          <a key={link.label} className="external-link page-button" href={link.href} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+                            {link.label} <ExternalLink size={12} />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                    {signalFields.length > 0 && (
+                      <div style={{ marginTop: 22 }}>
+                        <h3>Research signals</h3>
+                        <p>Additional context available in the company profile dataset.</p>
+                        {signalFields.map(([label, value]) => (
+                          <div className="field" key={label}><span>{label}</span><b>{displayValue(value)}</b></div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 22 }}>
+                      <h3>Application notes</h3>
+                      <p>Keep track of referrals, roles to target, questions and the next action.</p>
+                      <label className="filter-control">
+                        <span>Next follow-up date</span>
+                        <input type="date" value={entry.followUpDate} onChange={(event) => updateTracker(current.company_id, { followUpDate: event.target.value })}
+                          style={{ padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                      </label>
+                      <label className="filter-control" style={{ marginTop: 12 }}>
+                        <span>Notes (stored in this browser)</span>
+                        <textarea value={entry.notes} onChange={(event) => updateTracker(current.company_id, { notes: event.target.value })}
+                          placeholder="Example: tailor CV for embedded systems; ask alumni for a referral…" rows={3}
+                          style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 10, border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12, lineHeight: 1.6 }} />
+                      </label>
+                    </div>
+                    {comparisonIds.length > 0 && (
+                      <div style={{ marginTop: 22 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <h3>Company comparison ({comparisonIds.length}/3)</h3>
+                          <button type="button" className="page-button" onClick={() => setComparisonIds([])}>Clear comparison</button>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, textAlign: 'left' }}>
+                            <thead><tr>
+                              <th style={{ padding: '9px 8px', borderBottom: '1px solid #c9cec2' }}>Signal</th>
+                              {comparisonIds.map((id) => <th key={id} style={{ padding: '9px 8px', borderBottom: '1px solid #c9cec2' }}>{displayValue(allCompanies.find((company) => company.company_id === id)?.short_name || allCompanies.find((company) => company.company_id === id)?.name)}</th>)}
+                            </tr></thead>
+                            <tbody>
+                              {([
+                                ['Category', (id: number) => allCompanies.find((company) => company.company_id === id)?.category],
+                                ['Headquarters', (id: number) => allCompanies.find((company) => company.company_id === id)?.headquarters_address],
+                                ['Founded', (id: number) => allCompanies.find((company) => company.company_id === id)?.incorporation_year],
+                                ['Technology', (id: number) => (data?.profiles || []).find((item) => item.company_id === id)?.full_json?.tech_stack],
+                                ['Growth', (id: number) => (data?.profiles || []).find((item) => item.company_id === id)?.full_json?.yoy_growth_rate],
+                                ['Hiring velocity', (id: number) => (data?.profiles || []).find((item) => item.company_id === id)?.full_json?.hiring_velocity],
+                              ] as const).map(([label, getValue]) => (
+                                <tr key={label}>
+                                  <td style={{ padding: '9px 8px', borderBottom: '1px solid #e0e2d9', color: '#59665e' }}>{label}</td>
+                                  {comparisonIds.map((id) => <td key={id} style={{ padding: '9px 8px', borderBottom: '1px solid #e0e2d9', minWidth: 120 }}>{displayValue(getValue(id))}</td>)}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                     <div className="note">
-                      <Database size={15} /> Live Supabase data. Missing values are shown honestly.
+                      <Database size={15} /> Company details come from the configured dataset. Job-search shortcuts open external services; notes stay in browser storage.
                     </div>
                   </div>
                 </>
@@ -372,48 +1309,400 @@ export default function App() {
               )}
             </section>
           </div>
-        ) : data ? (
+        ) : data && tab === 'tracker' ? (
           <section className="panel skills">
+            <div className="panel-title">
+              <div><h2>My company tracker</h2><p>Shortlist companies, manage application stages and remember your next action.</p></div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span>{trackedCompanies.length} tracked</span>
+                <button type="button" className="page-button" onClick={exportTrackerCsv} disabled={trackedCompanies.length === 0}>
+                  <ClipboardList size={13} /> Export CSV
+                </button>
+              </div>
+            </div>
+            <div className="note" style={{ marginTop: 0, marginBottom: 18 }}>
+              <Bookmark size={15} /> Saved companies, stages, dates and notes are stored only in this browser, not synced across devices or written to Supabase.
+            </div>
+            {followUpsDue.length > 0 && (
+              <div className="alert" role="status">
+                <CalendarDays size={18} />
+                <div><b>{followUpsDue.length} follow-up{followUpsDue.length === 1 ? '' : 's'} due</b>
+                  <p>Review your next action for {followUpsDue.map((company) => company.short_name || company.name).join(', ')}.</p>
+                </div>
+              </div>
+            )}
+            {trackedCompanies.length === 0 ? (
+              <div className="empty-results">
+                <ClipboardList size={24} /><b>Your tracker is empty</b>
+                <span>Save a company or choose a tracker stage from any company profile to begin.</span>
+                <button type="button" onClick={() => navigateToAppTab('companies')}>Explore companies</button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 14 }}>
+                {trackedCompanies.slice().sort((a, b) => {
+                  const dateA = tracker[String(a.company_id)]?.followUpDate || '9999-12-31';
+                  const dateB = tracker[String(b.company_id)]?.followUpDate || '9999-12-31';
+                  return dateA.localeCompare(dateB);
+                }).map((company) => {
+                  const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
+                  const logo = companyLogo(company.company_id);
+                  return (
+                    <article key={company.company_id} className="skill" style={{ background: '#fffef9' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div className="mark" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                          {(company.short_name || company.name || 'J').slice(0, 1)}
+                          {logo && <img src={logo} alt="" onError={(event) => { event.currentTarget.style.display = 'none'; }} style={{ position: 'absolute', inset: 2, width: 'calc(100% - 4px)', height: 'calc(100% - 4px)', objectFit: 'contain', background: '#fffef9' }} />}
+                        </div>
+                        <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                          <b style={{ display: 'block', color: '#293637', fontSize: 13 }}>{displayValue(company.name)}</b>
+                          <small style={{ display: 'block', marginTop: 4, color: '#69766d' }}>{categoryOf(company)} · ID {company.company_id}</small>
+                          <button type="button" className="page-button" style={{ marginTop: 9 }} onClick={() => selectCompany(company.company_id, 'companies', true)}>Open company profile</button>
+                        </div>
+                        <label className="filter-control" style={{ width: 175, margin: 0 }}>
+                          <span>Application stage</span>
+                          <select className="filter-select" value={item.status} onChange={(event) => updateTracker(company.company_id, { status: event.target.value as TrackerStatus })}>
+                            {TRACKER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                          </select>
+                        </label>
+                        <button type="button" className="page-button" onClick={() => toggleSaved(company.company_id)} aria-pressed={item.saved}>
+                          <Star size={13} fill={item.saved ? 'currentColor' : 'none'} /> {item.saved ? 'Unsave' : 'Save'}
+                        </button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, .65fr) minmax(0, 1.35fr)', gap: 12, marginTop: 14 }}>
+                        <label className="filter-control" style={{ margin: 0 }}>
+                          <span>Follow-up date</span>
+                          <input type="date" value={item.followUpDate} onChange={(event) => updateTracker(company.company_id, { followUpDate: event.target.value })} style={{ padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                        </label>
+                        <label className="filter-control" style={{ margin: 0 }}>
+                          <span>Notes / next action</span>
+                          <textarea value={item.notes} onChange={(event) => updateTracker(company.company_id, { notes: event.target.value })} rows={2} placeholder="What do you need to do next?" style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 9, border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12, lineHeight: 1.5 }} />
+                        </label>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        ) : data && tab === 'skills' ? (
+          <section className="panel skills">
+            <label className="filter-control">
+              <span>Select company</span>
+              <select
+                className="filter-select"
+                value={selectedForSkills}
+                onChange={(event) => {
+                  const chosenCompany = allCompanies.find(
+                    (company) => String(company.company_id) === event.target.value,
+                  );
+                  if (chosenCompany) selectCompany(chosenCompany.company_id, 'skills', false);
+                }}
+                aria-label="Select company for skill intelligence"
+              >
+                {allCompanies.length === 0 ? (
+                  <option value="">Not available</option>
+                ) : (
+                  allCompanies.map((company) => (
+                    <option key={company.company_id} value={String(company.company_id)}>
+                      {displayValue(company.name)}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
+            <label className="search" style={{ marginTop: 14 }}>
+              <Search size={16} />
+              <input value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)}
+                placeholder="Search skills, tools or learning topics" aria-label="Search skill roadmap" />
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+              <button type="button" className="page-button" aria-pressed={requiredOnly}
+                onClick={() => setRequiredOnly((value) => !value)}
+                style={requiredOnly ? { background: '#e4e9de', boxShadow: 'inset 0 0 0 1px #788a79' } : undefined}>
+                <Target size={13} /> {requiredOnly ? 'Showing required skills' : 'Show required skills only'}
+              </button>
+              <span style={{ color: '#69766d', fontSize: 10 }}>
+                {visibleSkills.length} matching skill areas · {skills.reduce((sum, skill) => sum + skill.topics.length, 0)} roadmap topics
+              </span>
+            </div>
             <div className="panel-title">
               <div>
                 <h2>Required skill matrix</h2>
-                <p>{current ? current.name : 'Select a company from Company directory first'}</p>
+                <p>{displayValue(current?.name)}</p>
               </div>
-              <span>{skills.length} skill areas</span>
+              <span>{visibleSkills.length} skill areas</span>
             </div>
             <div className="skill-grid">
-              {skills.map((skill: any) => (
-                <details className="skill" key={skill.skill_set_id}>
-                  <summary>
-                    <BrainCircuit size={18} />
-                    <span>
-                      <b>{skill.skill_set_name}</b>
-                      <small>
-                        {skill.req?.required_level
-                          ? 'Target level ' + skill.req.required_level + '/10'
-                          : 'No company requirement'}
-                      </small>
-                    </span>
-                    <strong>{skill.req?.required_level || '—'}</strong>
-                  </summary>
-                  <div className="bar">
-                    <i style={{ width: (Number(skill.req?.required_level) || 0) * 10 + '%' }} />
-                  </div>
-                  {skill.topics.map((topic: any) => (
-                    <p className="topic" key={topic.level_number}>
-                      <b>Level {topic.level_number}</b> {topic.topics}
-                    </p>
-                  ))}
-                </details>
-              ))}
+              {visibleSkills.map((skill) => {
+                const level = skill.req?.required_level;
+                const levelIsPresent = hasValue(level);
+                const proficiencyName = skill.proficiency?.proficiency_name;
+                const levelText = levelIsPresent
+                  ? 'Target level ' + displayValue(level) + '/10' +
+                    (hasValue(proficiencyName) ? ' · ' + displayValue(proficiencyName) : '')
+                  : hasValue(proficiencyName)
+                    ? displayValue(proficiencyName)
+                    : 'No company requirement';
+
+                return (
+                  <details className="skill" key={skill.skill_set_id}>
+                    <summary>
+                      <BrainCircuit size={18} />
+                      <span>
+                        <b>{displayValue(skill.skill_set_name)}</b>
+                        <small>{levelText}</small>
+                      </span>
+                      <strong>{levelIsPresent ? displayValue(level) : 'Not required'}</strong>
+                    </summary>
+                    <div className="bar">
+                      <i
+                        style={{
+                          width: (levelIsPresent && Number.isFinite(Number(level))
+                            ? Math.min(10, Math.max(0, Number(level)))
+                            : 0) * 10 + '%',
+                        }}
+                      />
+                    </div>
+                    {skill.topics.map((topic, index) => (
+                      <p className="topic" key={String(topic.level_number) + '-' + index}>
+                        <b>Level {displayValue(topic.level_number)}</b> {displayValue(topic.topics)}
+                      </p>
+                    ))}
+                  </details>
+                );
+              })}
+              {visibleSkills.length === 0 && (
+                <div className="empty-results" style={{ gridColumn: '1 / -1' }}>
+                  <BrainCircuit size={22} /><b>No matching skills</b>
+                  <span>Try a different search or turn off the required-skills-only filter.</span>
+                </div>
+              )}
             </div>
             <div className="note">
-              <Database size={15} /> Skills, proficiency levels and topic roadmaps are read from Supabase.
+              <TrendingUp size={15} /> Roadmaps are loaded from Supabase. A missing company requirement is not evidence that a skill is unimportant.
+            </div>
+          </section>
+        ) : data && tab === 'prep' ? (
+          <section className="panel skills">
+            <div className="panel-title">
+              <div>
+                <h2>Build a practical weekly plan</h2>
+                <p>Set your direction, assess your current level, then turn the biggest gaps into small actions.</p>
+              </div>
+              <span>{prepTasks.length} suggested tasks</span>
+            </div>
+
+            <div className="note" style={{ marginTop: 0, marginBottom: 14 }}>
+              <UserRound size={15} /> Your profile, ratings and completed tasks save automatically in this browser. There is no account sync.
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 22 }}>
+              <button type="button" className="page-button" onClick={exportPrepPlanCsv}>
+                <Download size={13} /> Export study plan CSV
+              </button>
+              <button type="button" className="page-button" onClick={exportWorkspaceBackup}>
+                <Download size={13} /> Back up all progress
+              </button>
+              <label className="page-button" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <Upload size={13} /> Restore backup
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  aria-label="Choose a JSSU workspace backup JSON file"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    event.currentTarget.value = '';
+                    void importWorkspaceBackup(file);
+                  }}
+                  style={{ display: 'none' }}
+                />
+              </label>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(245px, 1fr))', gap: 14, marginBottom: 24 }}>
+              <article className="skill" style={{ background: '#fffef9' }}>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 0 }}>
+                  <UserRound size={17} /> Student profile
+                </h3>
+                <div style={{ display: 'grid', gap: 11 }}>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Name (optional)</span>
+                    <input value={studentProfile.name} onChange={(event) => updateStudentProfile({ name: event.target.value })} placeholder="Your name"
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Graduation year</span>
+                    <input inputMode="numeric" value={studentProfile.graduationYear} onChange={(event) => updateStudentProfile({ graduationYear: event.target.value.replace(/[^0-9]/g, '').slice(0, 4) })} placeholder="e.g. 2029" maxLength={4}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Career track</span>
+                    <select className="filter-select" value={studentProfile.careerTrack} onChange={(event) => updateStudentProfile({ careerTrack: event.target.value })}>
+                      {CAREER_TRACKS.map((track) => <option key={track} value={track}>{track}</option>)}
+                    </select>
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Target role</span>
+                    <input value={studentProfile.targetRole} onChange={(event) => updateStudentProfile({ targetRole: event.target.value })} placeholder="e.g. Software Engineer"
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Hours available per week: {studentProfile.weeklyHours}</span>
+                    <input type="range" min="1" max="20" step="1" value={studentProfile.weeklyHours} onChange={(event) => updateStudentProfile({ weeklyHours: Number(event.target.value) })}
+                      style={{ width: '100%', accentColor: '#526b59' }} />
+                  </label>
+                </div>
+              </article>
+
+              <article className="skill" style={{ background: '#fffef9' }}>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 0 }}>
+                  <Target size={17} /> Target company
+                </h3>
+                <p style={{ marginTop: 0 }}>Choose a company to use any available skill requirements as a reference.</p>
+                <label className="filter-control">
+                  <span>Company to prepare for</span>
+                  <select className="filter-select" value={selectedForSkills} onChange={(event) => {
+                    const chosenCompany = allCompanies.find((company) => String(company.company_id) === event.target.value);
+                    if (chosenCompany) selectCompany(chosenCompany.company_id, 'prep', false);
+                  }}>
+                    {allCompanies.length === 0
+                      ? <option value="">No companies available</option>
+                      : allCompanies.map((company) => <option key={company.company_id} value={String(company.company_id)}>{displayValue(company.name)}</option>)}
+                  </select>
+                </label>
+                <div style={{ marginTop: 16, padding: 12, border: '1px solid #d7dacf', borderRadius: 3 }}>
+                  <b style={{ display: 'block', marginBottom: 5 }}>{displayValue(current?.name)}</b>
+                  <span style={{ fontSize: 11, color: '#69766d' }}>{companyRequirementCount} skill areas have a numeric company target in the available dataset.</span>
+                </div>
+                {companyRequirementCount === 0 && (
+                  <div className="note" role="status">
+                    <Database size={15} /> No usable company-specific skill targets are available for this selection. Priorities will use your self-ratings only; this is not a company-match score.
+                  </div>
+                )}
+                {companyRequirementCount > 0 && (
+                  <div className="note">
+                    <Target size={15} /> Skills with numeric targets are compared on a 10-point scale. Self-ratings are converted from 1–5 by doubling them; use this as a rough planning aid, not an official assessment.
+                  </div>
+                )}
+              </article>
+            </div>
+
+            <div className="panel-title">
+              <div>
+                <h2>Skill self-assessment</h2>
+                <p>Rate what you can do today, not what you have only watched or read.</p>
+              </div>
+              <span>{ratedSkillCount} of {skills.length} rated</span>
+            </div>
+            <div style={{ display: 'grid', gap: 10, marginBottom: 22 }}>
+              {skills.map((skill) => {
+                const id = String(skill.skill_set_id);
+                const rating = skillRatings[id] || 0;
+                const hasTarget = Boolean(skill.req && hasValue(skill.req.required_level) && Number.isFinite(Number(skill.req.required_level)));
+                const target = hasTarget ? Number(skill.req?.required_level) : null;
+                const skillName = displayValue(skill.skill_set_name);
+                const statusText = rating === 0
+                  ? 'Not assessed'
+                  : target !== null
+                    ? rating * 2 < target
+                      ? 'Below the available target'
+                      : 'At or above the available target'
+                    : rating <= 2
+                      ? 'Consider for extra practice'
+                      : 'No company target to compare';
+                return (
+                  <article className="skill" key={skill.skill_set_id} style={{ background: '#fffef9' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                        <b style={{ display: 'block', color: '#293637', fontSize: 13 }}>{skillName}</b>
+                        {hasValue(skill.skill_set_description) && <p style={{ margin: '5px 0', fontSize: 11 }}>{displayValue(skill.skill_set_description)}</p>}
+                        <small style={{ display: 'block', color: '#69766d', marginTop: 5 }}>
+                          {target !== null ? 'Company target: ' + target + '/10' : 'Company target: unavailable'} · {statusText}
+                        </small>
+                      </div>
+                      <label className="filter-control" style={{ width: 210, maxWidth: '100%', margin: 0 }}>
+                        <span>Your current level</span>
+                        <select className="filter-select" value={rating ? String(rating) : ''} onChange={(event) => updateSkillRating(skill.skill_set_id, event.target.value)}>
+                          <option value="">Not assessed</option>
+                          <option value="1">1 · Just starting</option>
+                          <option value="2">2 · Learning basics</option>
+                          <option value="3">3 · Can do guided tasks</option>
+                          <option value="4">4 · Work independently</option>
+                          <option value="5">5 · Can build and explain</option>
+                        </select>
+                      </label>
+                    </div>
+                  </article>
+                );
+              })}
+              {skills.length === 0 && (
+                <div className="empty-results">
+                  <BrainCircuit size={22} /><b>No skill catalogue available</b>
+                  <span>The configured dataset did not return skills. The profile remains saved locally, but a topic-based plan needs skill data.</span>
+                </div>
+              )}
+            </div>
+
+            <div className="panel-title">
+              <div>
+                <h2>This week's action list</h2>
+                <p>{studentProfile.weeklyHours} focused hours per week · Start small and finish each task before adding more.</p>
+              </div>
+              <span>{prepDoneCount}/{prepTasks.length} complete</span>
+            </div>
+            <div style={{ height: 7, background: '#e0e4d9', borderRadius: 2, overflow: 'hidden', margin: '0 0 16px' }} aria-label={'Plan completion ' + prepProgress + '%'} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={prepProgress}>
+              <div style={{ height: '100%', width: prepProgress + '%', background: '#526b59', transition: 'width 160ms ease' }} />
+            </div>
+            {prepTasks.length > 0 ? (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {prepTasks.map((task) => {
+                  const done = Boolean(prepChecklist[task.id]);
+                  return (
+                    <label key={task.id} className="skill" style={{ display: 'flex', alignItems: 'flex-start', gap: 11, background: done ? '#edf0e8' : '#fffef9', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={done} onChange={(event) => setPrepChecklist((previous) => ({ ...previous, [task.id]: event.target.checked }))} style={{ marginTop: 3, accentColor: '#526b59' }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <b style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#293637', fontSize: 12, textDecoration: done ? 'line-through' : 'none' }}>
+                          {done && <CheckCircle2 size={14} />} {task.title}
+                        </b>
+                        <small style={{ display: 'block', marginTop: 4, color: '#69766d' }}>{task.skillName}</small>
+                        <p style={{ marginBottom: 0 }}>{task.detail}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : ratedSkillCount === 0 ? (
+              <div className="empty-results">
+                <BookOpen size={23} /><b>Rate a few skills to start</b>
+                <span>Unassessed skills are not treated as weaknesses. Choose honest self-ratings above to generate a small, relevant learning checklist.</span>
+              </div>
+            ) : (
+              <div className="empty-results">
+                <CheckCircle2 size={23} /><b>No priority gaps detected from these inputs</b>
+                <span>{companyRequirementCount > 0 ? 'Your ratings do not show a positive numeric gap against the available targets.' : 'Your ratings are mostly above the low-confidence threshold. Review them honestly or choose a company with usable requirements.'}</span>
+              </div>
+            )}
+            <div className="note" style={{ marginTop: 18 }}>
+              <Clock3 size={15} /> Planning estimate only. Self-ratings can be inaccurate, and the dataset may be incomplete or outdated. Verify role requirements from official company sources.
             </div>
           </section>
         ) : null}
 
-        <footer>Read-only Supabase connection · No service-role key in frontend</footer>
+        <footer>
+          JSS University, Noida
+          {' | '}
+          <a href="#privacy" onClick={(event) => { event.preventDefault(); navigateToStaticPage('privacy'); }}>
+            Privacy
+          </a>
+          {' | '}
+          <a href="#terms" onClick={(event) => { event.preventDefault(); navigateToStaticPage('terms'); }}>
+            Terms
+          </a>
+          {' | '}
+          <a href="#tab=tracker" onClick={(event) => { event.preventDefault(); navigateToAppTab('tracker'); }}>
+            My tracker
+          </a>
+        </footer>
       </main>
     </div>
   );
