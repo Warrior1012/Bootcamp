@@ -573,7 +573,7 @@ export default function App() {
   function csvCell(value: unknown): string {
     const input = String(value ?? '');
     // Prevent spreadsheet applications from evaluating user-entered text as a formula.
-    const safe = /^[=+@\\-\\t\\r]/.test(input) ? "'" + input : input;
+    const safe = /^[=+@]/.test(input) || input.startsWith('-') || input.startsWith('\t') || input.startsWith('\r') ? "'" + input : input;
     return '"' + safe.replace(/"/g, '""') + '"';
   }
 
@@ -596,8 +596,8 @@ export default function App() {
     const csv = [
       ['Company ID', 'Company', 'Category', 'Status', 'Saved', 'Follow-up date', 'Notes'],
       ...rows,
-    ].map((row) => row.map(csvCell).join(',')).join('\\r\\n');
-    downloadTextFile('jssu-placement-tracker.csv', '\\ufeff' + csv, 'text/csv;charset=utf-8;');
+    ].map((row) => row.map(csvCell).join(',')).join('\r\n');
+    downloadTextFile('jssu-placement-tracker.csv', '\ufeff' + csv, 'text/csv;charset=utf-8;');
   }
 
   function exportPrepPlanCsv() {
@@ -631,8 +631,8 @@ export default function App() {
         task.detail,
       ]),
     ];
-    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\\r\\n');
-    downloadTextFile('jssu-prep-plan.csv', '\\ufeff' + csv, 'text/csv;charset=utf-8;');
+    const csv = rows.map((row) => row.map(csvCell).join(',')).join('\r\n');
+    downloadTextFile('jssu-prep-plan.csv', '\ufeff' + csv, 'text/csv;charset=utf-8;');
   }
 
   function exportWorkspaceBackup() {
@@ -671,7 +671,7 @@ export default function App() {
       const rawHours = Number(rawProfile.weeklyHours);
       const safeProfile: StudentProfile = {
         name: typeof rawProfile.name === 'string' ? rawProfile.name.slice(0, 120) : '',
-        graduationYear: typeof rawProfile.graduationYear === 'string' && /^\\d{4}$/.test(rawProfile.graduationYear) ? rawProfile.graduationYear : '',
+        graduationYear: typeof rawProfile.graduationYear === 'string' && /^\d{4}$/.test(rawProfile.graduationYear) ? rawProfile.graduationYear : '',
         targetRole: typeof rawProfile.targetRole === 'string' ? rawProfile.targetRole.slice(0, 160) : '',
         careerTrack: typeof rawProfile.careerTrack === 'string' && CAREER_TRACKS.includes(rawProfile.careerTrack) ? rawProfile.careerTrack : DEFAULT_STUDENT_PROFILE.careerTrack,
         weeklyHours: Number.isFinite(rawHours) ? Math.min(20, Math.max(1, Math.round(rawHours))) : DEFAULT_STUDENT_PROFILE.weeklyHours,
@@ -680,13 +680,13 @@ export default function App() {
       const safeTracker: TrackerStore = {};
       const rawTracker = payload.tracker as Record<string, unknown>;
       for (const [id, value] of Object.entries(rawTracker)) {
-        if (!/^\\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
+        if (!/^\d+$/.test(id) || !value || typeof value !== 'object' || Array.isArray(value)) continue;
         const item = value as Record<string, unknown>;
         safeTracker[id] = {
           saved: Boolean(item.saved),
           status: TRACKER_STATUSES.includes(item.status as TrackerStatus) ? item.status as TrackerStatus : 'Not tracked',
           notes: typeof item.notes === 'string' ? item.notes.slice(0, 10000) : '',
-          followUpDate: typeof item.followUpDate === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(item.followUpDate) ? item.followUpDate : '',
+          followUpDate: typeof item.followUpDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(item.followUpDate) ? item.followUpDate : '',
           updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt.slice(0, 64) : '',
         };
       }
@@ -694,7 +694,7 @@ export default function App() {
       const safeRatings: Record<string, number> = {};
       for (const [id, value] of Object.entries(payload.skillRatings as Record<string, unknown>)) {
         const rating = Number(value);
-        if (/^\\d+$/.test(id) && Number.isInteger(rating) && rating >= 1 && rating <= 5) safeRatings[id] = rating;
+        if (/^\d+$/.test(id) && Number.isInteger(rating) && rating >= 1 && rating <= 5) safeRatings[id] = rating;
       }
 
       const safeChecklist: Record<string, boolean> = {};
