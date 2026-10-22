@@ -51,6 +51,7 @@ export interface AppData {
   requirements: SkillRequirementRecord[];
   topics: SkillTopicRecord[];
   proficiency: ProficiencyLevelRecord[];
+  warnings?: string[];
 }
 
 export interface SkillWithDetails extends SkillSetRecord {
