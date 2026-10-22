@@ -11,6 +11,17 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { loadData } from './lib/supabase';
+import type {
+  AppData,
+  CompanyRecord,
+  CompanyProfileRecord,
+  ProfileField,
+  ProficiencyLevelRecord,
+  SkillRequirementRecord,
+  SkillSetRecord,
+  SkillTopicRecord,
+  SkillWithDetails,
+} from './types';
 
 type AppTab = 'companies' | 'skills';
 type AppView = AppTab | 'privacy' | 'terms';
@@ -90,7 +101,7 @@ function findLinkedInUrl(value: unknown, depth = 0): string | null {
   return null;
 }
 
-function categoryOf(company: any): string {
+function categoryOf(company: CompanyRecord): string {
   const category = typeof company.category === 'string' ? company.category.trim() : '';
   const nature = typeof company.nature_of_company === 'string' ? company.nature_of_company.trim() : '';
   return category || nature || 'Not available';
@@ -107,16 +118,16 @@ function hasValue(value: unknown): boolean {
   return value !== null && value !== undefined && String(value).trim() !== '';
 }
 
-function routeCompany(companies: any[], routeId: string | null): any | null {
+function routeCompany(companies: CompanyRecord[], routeId: string | null): CompanyRecord | null {
   if (routeId !== null) {
-    const match = companies.find((company: any) => String(company.company_id) === routeId);
+    const match = companies.find((company) => String(company.company_id) === routeId);
     if (match) return match;
   }
   return companies[0] ?? null;
 }
 
 export default function App() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<AppData | null>(null);
   const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(true);
   const [q, setQ] = useState('');
@@ -171,12 +182,12 @@ export default function App() {
     return () => window.removeEventListener('hashchange', syncFromHash);
   }, [data]);
 
-  const allCompanies = data?.companies || [];
+  const allCompanies: CompanyRecord[] = data?.companies || [];
   const categories = Array.from(
-    new Set<string>(allCompanies.map((company: any) => categoryOf(company))),
+    new Set<string>(allCompanies.map((company) => categoryOf(company))),
   ).sort((a: string, b: string) => a.localeCompare(b));
   const needle = q.trim().toLowerCase();
-  const companies = allCompanies.filter((company: any) => {
+  const companies = allCompanies.filter((company) => {
     const searchable = [
       company.name,
       company.short_name,
@@ -184,7 +195,7 @@ export default function App() {
       company.nature_of_company,
       company.headquarters_address,
     ]
-      .filter((value: unknown) => hasValue(value))
+      .filter((value) => hasValue(value))
       .join(' ')
       .toLowerCase();
 
@@ -199,11 +210,11 @@ export default function App() {
   const rangeStart = companies.length ? startIndex + 1 : 0;
   const rangeEnd = Math.min(startIndex + pageSize, companies.length);
 
-  const current = allCompanies.find((company: any) => String(company.company_id) === String(selected));
+  const current = allCompanies.find((company) => String(company.company_id) === String(selected));
   const profile = (data?.profiles || []).find(
-    (item: any) => String(item.company_id) === String(selected),
+    (item) => String(item.company_id) === String(selected),
   );
-  const full = {
+  const full: Record<string, unknown> = {
     ...(profile?.short_json || {}),
     ...(profile?.full_json || {}),
     ...(current || {}),
@@ -211,17 +222,17 @@ export default function App() {
   const websiteUrl = externalUrl(current?.website_url);
   const linkedinUrl = findLinkedInUrl(full);
 
-  const requirements = (data?.requirements || []).filter(
-    (item: any) => String(item.company_id) === String(selected),
+  const requirements: SkillRequirementRecord[] = (data?.requirements || []).filter(
+    (item) => String(item.company_id) === String(selected),
   );
-  const skills = (data?.skills || [])
-    .map((skill: any) => {
+  const skills: SkillWithDetails[] = (data?.skills || [])
+    .map((skill: SkillSetRecord) => {
       const requirement = requirements.find(
-        (item: any) => String(item.skill_set_id) === String(skill.skill_set_id),
+        (item) => String(item.skill_set_id) === String(skill.skill_set_id),
       );
       const proficiency = requirement
         ? (data?.proficiency || []).find(
-            (item: any) =>
+            (item: ProficiencyLevelRecord) =>
               String(item.proficiency_level_id) ===
               String(requirement.required_proficiency_level_id),
           )
@@ -231,11 +242,11 @@ export default function App() {
         req: requirement,
         proficiency,
         topics: (data?.topics || []).filter(
-          (topic: any) => String(topic.skill_set_id) === String(skill.skill_set_id),
+          (topic: SkillTopicRecord) => String(topic.skill_set_id) === String(skill.skill_set_id),
         ),
       };
     })
-    .sort((a: any, b: any) => {
+    .sort((a, b) => {
       const levelA = a.req?.required_level;
       const levelB = b.req?.required_level;
       const hasLevelA = hasValue(levelA) && Number.isFinite(Number(levelA));
@@ -247,7 +258,7 @@ export default function App() {
       return displayValue(a.skill_set_name).localeCompare(displayValue(b.skill_set_name));
     });
 
-  const profileFields: Array<{ label: string; value: unknown; href?: string | null }> = current
+  const profileFields: ProfileField[] = current
     ? [
         { label: 'Category', value: current.category },
         { label: 'Company type', value: current.nature_of_company },
@@ -266,7 +277,7 @@ export default function App() {
 
   function navigateToAppTab(nextTab: AppTab) {
     const fallbackCompany = allCompanies.find(
-      (company: any) => String(company.company_id) === String(selected),
+      (company) => String(company.company_id) === String(selected),
     ) || allCompanies[0] || null;
     const companyId = fallbackCompany ? fallbackCompany.company_id : null;
 
@@ -482,7 +493,7 @@ export default function App() {
               </label>
 
               <div className="company-results" aria-live="polite">
-                {visibleCompanies.map((company: any) => (
+                {visibleCompanies.map((company) => (
                   <button
                     className={'company ' + (selected === company.company_id ? 'chosen' : '')}
                     key={company.company_id}
@@ -633,7 +644,7 @@ export default function App() {
                 value={selectedForSkills}
                 onChange={(event) => {
                   const chosenCompany = allCompanies.find(
-                    (company: any) => String(company.company_id) === event.target.value,
+                    (company) => String(company.company_id) === event.target.value,
                   );
                   if (chosenCompany) selectCompany(chosenCompany.company_id, 'skills', false);
                 }}
@@ -642,7 +653,7 @@ export default function App() {
                 {allCompanies.length === 0 ? (
                   <option value="">Not available</option>
                 ) : (
-                  allCompanies.map((company: any) => (
+                  allCompanies.map((company) => (
                     <option key={company.company_id} value={String(company.company_id)}>
                       {displayValue(company.name)}
                     </option>
@@ -658,7 +669,7 @@ export default function App() {
               <span>{skills.length} skill areas</span>
             </div>
             <div className="skill-grid">
-              {skills.map((skill: any) => {
+              {skills.map((skill) => {
                 const level = skill.req?.required_level;
                 const levelIsPresent = hasValue(level);
                 const proficiencyName = skill.proficiency?.proficiency_name;
@@ -688,7 +699,7 @@ export default function App() {
                         }}
                       />
                     </div>
-                    {skill.topics.map((topic: any, index: number) => (
+                    {skill.topics.map((topic, index) => (
                       <p className="topic" key={String(topic.level_number) + '-' + index}>
                         <b>Level {displayValue(topic.level_number)}</b> {displayValue(topic.topics)}
                       </p>
