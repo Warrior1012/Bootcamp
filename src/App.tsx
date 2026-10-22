@@ -6,6 +6,14 @@ import {
   RefreshCw,
   Database,
   AlertCircle,
+  Bookmark,
+  CalendarDays,
+  ClipboardList,
+  Globe,
+  MapPin,
+  Star,
+  Target,
+  TrendingUp,
   ChevronLeft,
   ChevronRight,
   ExternalLink,
@@ -22,8 +30,81 @@ import type {
   SkillWithDetails,
 } from './types';
 
-type AppTab = 'companies' | 'skills';
+type AppTab = 'companies' | 'skills' | 'tracker';
 type AppView = AppTab | 'privacy' | 'terms';
+
+type TrackerStatus =
+  | 'Not tracked' | 'Interested' | 'Researching' | 'Applied'
+  | 'Assessment' | 'Interview' | 'Offer' | 'Rejected' | 'Not pursuing';
+
+type CompanyTrackerEntry = {
+  saved: boolean;
+  status: TrackerStatus;
+  notes: string;
+  followUpDate: string;
+  updatedAt: string;
+};
+type TrackerStore = Record<string, CompanyTrackerEntry>;
+
+const TRACKER_STORAGE_KEY = 'jssu-placement-tracker-v1';
+const TRACKER_STATUSES: TrackerStatus[] = [
+  'Not tracked', 'Interested', 'Researching', 'Applied',
+  'Assessment', 'Interview', 'Offer', 'Rejected', 'Not pursuing',
+];
+const EMPTY_TRACKER_ENTRY: CompanyTrackerEntry = {
+  saved: false, status: 'Not tracked', notes: '', followUpDate: '', updatedAt: '',
+};
+
+function readTrackerStore(): TrackerStore {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(TRACKER_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, Partial<CompanyTrackerEntry>>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const clean: TrackerStore = {};
+    for (const [id, item] of Object.entries(parsed)) {
+      if (!item || typeof item !== 'object') continue;
+      clean[id] = {
+        ...EMPTY_TRACKER_ENTRY,
+        saved: Boolean(item.saved),
+        status: TRACKER_STATUSES.includes(item.status as TrackerStatus) ? item.status as TrackerStatus : 'Not tracked',
+        notes: typeof item.notes === 'string' ? item.notes : '',
+        followUpDate: typeof item.followUpDate === 'string' ? item.followUpDate : '',
+        updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+      };
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+function isTrackedEntry(item: CompanyTrackerEntry): boolean {
+  return item.saved || item.status !== 'Not tracked' || Boolean(item.notes.trim()) || Boolean(item.followUpDate);
+}
+
+function findValueByKey(value: unknown, pattern: RegExp, depth = 0): unknown {
+  if (depth > 7 || !value || typeof value !== 'object') return null;
+  for (const [key, child] of Object.entries(value)) {
+    if (pattern.test(key) && (typeof child === 'string' || typeof child === 'number')) {
+      const candidate = String(child).trim();
+      if (candidate && !/^n\/?a$/i.test(candidate)) return child;
+    }
+    if (child && typeof child === 'object') {
+      const found = findValueByKey(child, pattern, depth + 1);
+      if (found !== null && found !== undefined) return found;
+    }
+  }
+  return null;
+}
+
+function socialUrl(value: unknown, platform: 'x' | 'generic' = 'generic'): string | null {
+  if (typeof value !== 'string') return null;
+  const raw = value.trim();
+  if (platform === 'x' && /^@[\w]+$/.test(raw)) return 'https://x.com/' + raw.slice(1);
+  return externalUrl(raw);
+}
 
 type HashRoute = {
   tab: AppView;
@@ -39,7 +120,7 @@ function readHashRoute(hash?: string): HashRoute {
 
   const params = new URLSearchParams(value);
   const requestedTab = params.get('tab');
-  const tab: AppTab = requestedTab === 'skills' ? 'skills' : 'companies';
+  const tab: AppTab = requestedTab === 'skills' ? 'skills' : requestedTab === 'tracker' ? 'tracker' : 'companies';
 
   return {
     tab,
@@ -135,6 +216,11 @@ export default function App() {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
   const [tab, setTab] = useState<AppView>(() => readHashRoute().tab);
+  const [tracker, setTracker] = useState<TrackerStore>(() => readTrackerStore());
+  const [directoryMode, setDirectoryMode] = useState<'all' | 'saved' | 'tracked'>('all');
+  const [skillQuery, setSkillQuery] = useState('');
+  const [requiredOnly, setRequiredOnly] = useState(false);
+  const [comparisonIds, setComparisonIds] = useState<number[]>([]);
 
   async function refresh() {
     setBusy(true);
@@ -154,6 +240,14 @@ export default function App() {
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(TRACKER_STORAGE_KEY, JSON.stringify(tracker));
+    } catch {
+      // Keep the dashboard functional when browser storage is disabled or full.
+    }
+  }, [tracker]);
 
   useEffect(() => {
     function syncFromHash() {
@@ -198,8 +292,17 @@ export default function App() {
       .join(' ')
       .toLowerCase();
 
-    return searchable.includes(needle) &&
-      (categoryFilter === 'all' || categoryOf(company) === categoryFilter);
+    const savedProfile = (data?.profiles || []).find((item) => String(item.company_id) === String(company.company_id));
+    const extendedSearch = [
+      ...Object.values(savedProfile?.short_json || {}),
+      ...Object.values(savedProfile?.full_json || {}),
+    ].filter((value) => typeof value === 'string').join(' ').toLowerCase();
+    const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
+    return (searchable + ' ' + extendedSearch).includes(needle) &&
+      (categoryFilter === 'all' || categoryOf(company) === categoryFilter) &&
+      (directoryMode === 'all' ||
+        (directoryMode === 'saved' && item.saved) ||
+        (directoryMode === 'tracked' && isTrackedEntry(item)));
   });
 
   const totalPages = Math.max(1, Math.ceil(companies.length / pageSize));
@@ -257,18 +360,86 @@ export default function App() {
       return displayValue(a.skill_set_name).localeCompare(displayValue(b.skill_set_name));
     });
 
+  const entry = current ? tracker[String(current.company_id)] || EMPTY_TRACKER_ENTRY : EMPTY_TRACKER_ENTRY;
+  const logoUrl = socialUrl(full.logo_url);
+  const xUrl = socialUrl(full.twitter_url || full.x_url || full.twitter_handle, 'x');
+  const instagramUrl = socialUrl(findValueByKey(full, /instagram.*url/i));
+  const facebookUrl = socialUrl(findValueByKey(full, /facebook.*url/i));
+  const youtubeUrl = socialUrl(findValueByKey(full, /youtube.*url|youtube_channel/i));
+  const careerUrl = socialUrl(findValueByKey(full, /career.*url|job.*portal.*url|recruitment.*url/i));
+  const profileLinks = [
+    ...(websiteUrl ? [{ label: 'Official website', href: websiteUrl }] : []),
+    ...(linkedinUrl ? [{ label: 'LinkedIn', href: linkedinUrl }] : []),
+    ...(instagramUrl ? [{ label: 'Instagram', href: instagramUrl }] : []),
+    ...(facebookUrl ? [{ label: 'Facebook', href: facebookUrl }] : []),
+    ...(xUrl ? [{ label: 'X / Twitter', href: xUrl }] : []),
+    ...(youtubeUrl ? [{ label: 'YouTube', href: youtubeUrl }] : []),
+    ...(careerUrl ? [{ label: 'Careers page', href: careerUrl }] : []),
+    ...(current?.name ? [{ label: 'Find jobs', href: 'https://www.linkedin.com/jobs/search/?keywords=' + encodeURIComponent(current.name) }] : []),
+    ...(current?.name ? [{ label: 'Search internships', href: 'https://www.google.com/search?q=' + encodeURIComponent(current.name + ' internships careers') }] : []),
+  ];
+  const signalFields: [string, unknown][] = [
+    ['CEO / leadership', full.ceo_name || full.key_leaders],
+    ['Technology stack', full.tech_stack],
+    ['Focus sectors', full.focus_sectors],
+    ['Hiring velocity', full.hiring_velocity],
+    ['Learning culture', full.learning_culture || full.training_spend],
+    ['Work culture', full.work_culture_summary || full.core_values],
+    ['Recent news', full.recent_news],
+    ['Key competitors', full.key_competitors],
+    ['Growth signal', full.yoy_growth_rate],
+  ].filter((item) => hasValue(item[1]));
   const profileFields: ProfileField[] = current
     ? [
         { label: 'Category', value: current.category },
         { label: 'Company type', value: current.nature_of_company },
+        { label: 'Founded', value: current.incorporation_year },
         { label: 'Vision', value: full.vision_statement },
         { label: 'Mission', value: full.mission_statement },
+        { label: 'Headquarters', value: current.headquarters_address },
         { label: 'Website', value: current.website_url, href: websiteUrl },
-        ...(linkedinUrl
-          ? [{ label: 'LinkedIn', value: 'View company profile', href: linkedinUrl }]
-          : []),
+        ...(linkedinUrl ? [{ label: 'LinkedIn', value: 'View company profile', href: linkedinUrl }] : []),
       ]
     : [];
+
+  const trackedCompanies = allCompanies.filter((company) => isTrackedEntry(tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY));
+  const savedCount = allCompanies.filter((company) => (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).saved).length;
+  const activeCount = trackedCompanies.filter((company) =>
+    ['Applied', 'Assessment', 'Interview', 'Offer'].includes((tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status),
+  ).length;
+  const todayKey = new Date().toLocaleDateString('en-CA');
+  const followUpsDue = trackedCompanies.filter((company) => {
+    const date = (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).followUpDate;
+    return Boolean(date) && date <= todayKey;
+  });
+  const visibleSkills = skills.filter((skill) => {
+    const text = [skill.skill_set_name, skill.short_name, skill.skill_set_description, ...skill.topics.map((topic) => topic.topics || '')].join(' ').toLowerCase();
+    return text.includes(skillQuery.trim().toLowerCase()) && (!requiredOnly || Boolean(skill.req));
+  });
+
+  function updateTracker(companyId: number, patch: Partial<CompanyTrackerEntry>) {
+    const id = String(companyId);
+    setTracker((previous) => ({
+      ...previous,
+      [id]: { ...EMPTY_TRACKER_ENTRY, ...(previous[id] || {}), ...patch, updatedAt: new Date().toISOString() },
+    }));
+  }
+
+  function toggleSaved(companyId: number) {
+    const item = tracker[String(companyId)] || EMPTY_TRACKER_ENTRY;
+    updateTracker(companyId, { saved: !item.saved });
+  }
+
+  function toggleComparison(companyId: number) {
+    setComparisonIds((previous) => previous.includes(companyId)
+      ? previous.filter((id) => id !== companyId)
+      : previous.length < 3 ? [...previous, companyId] : previous);
+  }
+
+  function companyLogo(companyId: number): string | null {
+    const item = (data?.profiles || []).find((profileItem) => String(profileItem.company_id) === String(companyId));
+    return socialUrl(item?.full_json?.logo_url || item?.short_json?.logo_url);
+  }
 
   function writeRoute(hash: string) {
     if (window.location.hash !== hash) window.location.hash = hash.slice(1);
@@ -338,6 +509,14 @@ export default function App() {
         >
           <BrainCircuit size={17} /> Skill intelligence
         </button>
+        <button
+          className={tab === 'tracker' ? 'nav active' : 'nav'}
+          aria-current={tab === 'tracker' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('tracker')}
+        >
+          <ClipboardList size={17} /> My tracker
+          {trackedCompanies.length > 0 && <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 800 }}>{trackedCompanies.length}</span>}
+        </button>
         <div className="connection">
           <i style={{ background: data ? '#19a66a' : '#e7a23b' }} />
           <div>
@@ -356,9 +535,11 @@ export default function App() {
                 ? 'Company directory'
                 : tab === 'skills'
                   ? 'Skill intelligence'
-                  : tab === 'privacy'
-                    ? 'Privacy'
-                    : 'Terms'}
+                  : tab === 'tracker'
+                    ? 'Company tracker'
+                    : tab === 'privacy'
+                      ? 'Privacy'
+                      : 'Terms'}
             </h1>
           </div>
           <button
@@ -388,6 +569,20 @@ export default function App() {
           </div>
         )}
 
+        {!busy && data && tab !== 'privacy' && tab !== 'terms' && (
+          <section className="stats" aria-label="Workspace summary" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+            <div><small>Companies</small><b>{allCompanies.length}</b></div>
+            <div><small>Saved</small><b>{savedCount}</b></div>
+            <div><small>In progress</small><b>{activeCount}</b></div>
+            <div><small>Follow-ups due</small><b>{followUpsDue.length}</b></div>
+          </section>
+        )}
+        {data?.warnings && data.warnings.length > 0 && tab !== 'privacy' && tab !== 'terms' && (
+          <div className="note" role="status" style={{ marginBottom: 16, marginTop: 0 }}>
+            <Database size={15} /> Some optional datasets could not be loaded: {data.warnings.join(', ')}. Company browsing remains available.
+          </div>
+        )}
+
         {tab === 'privacy' ? (
           <section className="panel">
             <div className="details">
@@ -398,9 +593,11 @@ export default function App() {
                 Values that are not present in the dataset are shown as unavailable.
               </p>
               <p>
-                This application does not provide visitor accounts, sign-in, or a form to submit
-                personal information. This statement describes the application interface and does
-                not make claims about logs or retention practices of the hosting or data providers.
+                This application does not provide visitor accounts or sign-in. Saved companies,
+                application stages, follow-up dates and notes are stored in this browser and are not
+                synced to an account or database. Avoid entering sensitive personal information.
+                This statement does not make claims about logs or retention practices of the hosting
+                or data providers.
               </p>
               <p>
                 The interface loads fonts from Google Fonts. When those fonts are requested, the
@@ -408,7 +605,7 @@ export default function App() {
                 for how its services process technical request information.
               </p>
               <div className="note">
-                TODO: Add the owner's contact email before public release.
+                Add the owner's contact email before public release. Tracker information stays in this browser.
               </div>
               <p>
                 <a href={appHash('companies', selected ?? (allCompanies[0]?.company_id ?? null))}>
@@ -458,6 +655,25 @@ export default function App() {
                 <span>{companies.length} results</span>
               </div>
 
+              <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap', marginBottom: 12 }}>
+                {([
+                  ['all', 'All companies'],
+                  ['saved', 'Saved'],
+                  ['tracked', 'Tracked'],
+                ] as const).map(([mode, label]) => (
+                  <button
+                    key={mode}
+                    type="button"
+                    className="page-button"
+                    aria-pressed={directoryMode === mode}
+                    onClick={() => { setDirectoryMode(mode); setPage(1); }}
+                    style={directoryMode === mode ? { background: '#e4e9de', boxShadow: 'inset 0 0 0 1px #788a79' } : undefined}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
               <label className="search">
                 <Search size={16} />
                 <input
@@ -499,13 +715,19 @@ export default function App() {
                     aria-pressed={selected === company.company_id}
                     onClick={() => selectCompany(company.company_id, 'companies', true)}
                   >
-                    <b className="mark">
+                    <b className="mark" style={{ position: 'relative', overflow: 'hidden', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       {(company.short_name || company.name || 'J').slice(0, 1)}
+                      {companyLogo(company.company_id) && (
+                        <img src={companyLogo(company.company_id) || undefined} alt="" loading="lazy"
+                          onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                          style={{ position: 'absolute', inset: 2, width: 'calc(100% - 4px)', height: 'calc(100% - 4px)', objectFit: 'contain', background: '#fffef9' }} />
+                      )}
                     </b>
                     <span>
                       <strong>{displayValue(company.name)}</strong>
-                      <small>{categoryOf(company)}</small>
+                      <small>{categoryOf(company)}{(tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status !== 'Not tracked' ? ' · ' + (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status : ''}</small>
                     </span>
+                    {(tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).saved && <Star size={14} aria-label="Saved company" fill="currentColor" />}
                   </button>
                 ))}
                 {visibleCompanies.length === 0 && (
@@ -575,14 +797,36 @@ export default function App() {
               {current ? (
                 <>
                   <div className="profile-head">
-                    <b className="mark big">
+                    <b className="mark big" style={{ position: 'relative', overflow: 'hidden', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
                       {(current.short_name || current.name || 'J').slice(0, 1)}
+                      {logoUrl && <img src={logoUrl} alt={displayValue(current.name) + ' logo'}
+                        onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                        style={{ position: 'absolute', inset: 3, width: 'calc(100% - 6px)', height: 'calc(100% - 6px)', objectFit: 'contain', background: '#fffef9' }} />}
                     </b>
-                    <div>
-                      <span className="eyebrow">COMPANY PROFILE</span>
+                    <div style={{ flex: 1 }}>
+                      <span className="eyebrow">COMPANY PROFILE · ID {current.company_id}</span>
                       <h2>{displayValue(current.name)}</h2>
-                      <p>{displayValue(current.headquarters_address)}</p>
+                      <p><MapPin size={12} style={{ display: 'inline', verticalAlign: 'middle' }} /> {displayValue(current.headquarters_address)}</p>
                     </div>
+                  </div>
+                  <div style={{ padding: '12px 22px', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, borderBottom: '1px solid #d8dbcf' }}>
+                    <button type="button" className="page-button" onClick={() => toggleSaved(current.company_id)} aria-pressed={entry.saved}>
+                      <Star size={14} fill={entry.saved ? 'currentColor' : 'none'} /> {entry.saved ? 'Saved to shortlist' : 'Save company'}
+                    </button>
+                    <label style={{ display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 11, color: '#59665e', fontWeight: 700 }}>
+                      Tracker
+                      <select className="filter-select" value={entry.status}
+                        onChange={(event) => updateTracker(current.company_id, { status: event.target.value as TrackerStatus })}
+                        aria-label="Company tracker status" style={{ width: 'auto', minWidth: 138, padding: '7px 8px' }}>
+                        {TRACKER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                      </select>
+                    </label>
+                    <button type="button" className="page-button" onClick={() => toggleComparison(current.company_id)} aria-pressed={comparisonIds.includes(current.company_id)}>
+                      <Target size={14} /> {comparisonIds.includes(current.company_id) ? 'Remove comparison' : 'Compare'}
+                    </button>
+                    <button type="button" className="page-button" onClick={() => navigateToAppTab('tracker')}>
+                      <ClipboardList size={14} /> Track & notes
+                    </button>
                   </div>
                   <div className="stats">
                     <div>
@@ -620,8 +864,74 @@ export default function App() {
                         </b>
                       </div>
                     ))}
+                    <div style={{ marginTop: 18 }}>
+                      <h3>Company links</h3>
+                      <p style={{ marginBottom: 12 }}>Links from the company profile, alongside clearly labelled job-search shortcuts.</p>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                        {profileLinks.map((link) => (
+                          <a key={link.label} className="external-link page-button" href={link.href} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'none' }}>
+                            {link.label} <ExternalLink size={12} />
+                          </a>
+                        ))}
+                      </div>
+                    </div>
+                    {signalFields.length > 0 && (
+                      <div style={{ marginTop: 22 }}>
+                        <h3>Research signals</h3>
+                        <p>Additional context available in the company profile dataset.</p>
+                        {signalFields.map(([label, value]) => (
+                          <div className="field" key={label}><span>{label}</span><b>{displayValue(value)}</b></div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 22 }}>
+                      <h3>Application notes</h3>
+                      <p>Keep track of referrals, roles to target, questions and the next action.</p>
+                      <label className="filter-control">
+                        <span>Next follow-up date</span>
+                        <input type="date" value={entry.followUpDate} onChange={(event) => updateTracker(current.company_id, { followUpDate: event.target.value })}
+                          style={{ padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                      </label>
+                      <label className="filter-control" style={{ marginTop: 12 }}>
+                        <span>Notes (stored in this browser)</span>
+                        <textarea value={entry.notes} onChange={(event) => updateTracker(current.company_id, { notes: event.target.value })}
+                          placeholder="Example: tailor CV for embedded systems; ask alumni for a referral…" rows={3}
+                          style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 10, border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12, lineHeight: 1.6 }} />
+                      </label>
+                    </div>
+                    {comparisonIds.length > 0 && (
+                      <div style={{ marginTop: 22 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <h3>Company comparison ({comparisonIds.length}/3)</h3>
+                          <button type="button" className="page-button" onClick={() => setComparisonIds([])}>Clear comparison</button>
+                        </div>
+                        <div style={{ overflowX: 'auto' }}>
+                          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11, textAlign: 'left' }}>
+                            <thead><tr>
+                              <th style={{ padding: '9px 8px', borderBottom: '1px solid #c9cec2' }}>Signal</th>
+                              {comparisonIds.map((id) => <th key={id} style={{ padding: '9px 8px', borderBottom: '1px solid #c9cec2' }}>{displayValue(allCompanies.find((company) => company.company_id === id)?.short_name || allCompanies.find((company) => company.company_id === id)?.name)}</th>)}
+                            </tr></thead>
+                            <tbody>
+                              {([
+                                ['Category', (id: number) => allCompanies.find((company) => company.company_id === id)?.category],
+                                ['Headquarters', (id: number) => allCompanies.find((company) => company.company_id === id)?.headquarters_address],
+                                ['Founded', (id: number) => allCompanies.find((company) => company.company_id === id)?.incorporation_year],
+                                ['Technology', (id: number) => (data?.profiles || []).find((item) => item.company_id === id)?.full_json?.tech_stack],
+                                ['Growth', (id: number) => (data?.profiles || []).find((item) => item.company_id === id)?.full_json?.yoy_growth_rate],
+                                ['Hiring velocity', (id: number) => (data?.profiles || []).find((item) => item.company_id === id)?.full_json?.hiring_velocity],
+                              ] as const).map(([label, getValue]) => (
+                                <tr key={label}>
+                                  <td style={{ padding: '9px 8px', borderBottom: '1px solid #e0e2d9', color: '#59665e' }}>{label}</td>
+                                  {comparisonIds.map((id) => <td key={id} style={{ padding: '9px 8px', borderBottom: '1px solid #e0e2d9', minWidth: 120 }}>{displayValue(getValue(id))}</td>)}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
                     <div className="note">
-                      <Database size={15} /> Company details are shown as provided by the available dataset.
+                      <Database size={15} /> Company details come from the configured dataset. Job-search shortcuts open external services; notes stay in browser storage.
                     </div>
                   </div>
                 </>
@@ -634,6 +944,76 @@ export default function App() {
               )}
             </section>
           </div>
+        ) : data && tab === 'tracker' ? (
+          <section className="panel skills">
+            <div className="panel-title">
+              <div><h2>My company tracker</h2><p>Shortlist companies, manage application stages and remember your next action.</p></div>
+              <span>{trackedCompanies.length} tracked</span>
+            </div>
+            <div className="note" style={{ marginTop: 0, marginBottom: 18 }}>
+              <Bookmark size={15} /> Saved companies, stages, dates and notes are stored only in this browser, not synced across devices or written to Supabase.
+            </div>
+            {followUpsDue.length > 0 && (
+              <div className="alert" role="status">
+                <CalendarDays size={18} />
+                <div><b>{followUpsDue.length} follow-up{followUpsDue.length === 1 ? '' : 's'} due</b>
+                  <p>Review your next action for {followUpsDue.map((company) => company.short_name || company.name).join(', ')}.</p>
+                </div>
+              </div>
+            )}
+            {trackedCompanies.length === 0 ? (
+              <div className="empty-results">
+                <ClipboardList size={24} /><b>Your tracker is empty</b>
+                <span>Save a company or choose a tracker stage from any company profile to begin.</span>
+                <button type="button" onClick={() => navigateToAppTab('companies')}>Explore companies</button>
+              </div>
+            ) : (
+              <div style={{ display: 'grid', gap: 14 }}>
+                {trackedCompanies.slice().sort((a, b) => {
+                  const dateA = tracker[String(a.company_id)]?.followUpDate || '9999-12-31';
+                  const dateB = tracker[String(b.company_id)]?.followUpDate || '9999-12-31';
+                  return dateA.localeCompare(dateB);
+                }).map((company) => {
+                  const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
+                  const logo = companyLogo(company.company_id);
+                  return (
+                    <article key={company.company_id} className="skill" style={{ background: '#fffef9' }}>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12, flexWrap: 'wrap' }}>
+                        <div className="mark" style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 }}>
+                          {(company.short_name || company.name || 'J').slice(0, 1)}
+                          {logo && <img src={logo} alt="" onError={(event) => { event.currentTarget.style.display = 'none'; }} style={{ position: 'absolute', inset: 2, width: 'calc(100% - 4px)', height: 'calc(100% - 4px)', objectFit: 'contain', background: '#fffef9' }} />}
+                        </div>
+                        <div style={{ flex: '1 1 180px', minWidth: 0 }}>
+                          <b style={{ display: 'block', color: '#293637', fontSize: 13 }}>{displayValue(company.name)}</b>
+                          <small style={{ display: 'block', marginTop: 4, color: '#69766d' }}>{categoryOf(company)} · ID {company.company_id}</small>
+                          <button type="button" className="page-button" style={{ marginTop: 9 }} onClick={() => selectCompany(company.company_id, 'companies', true)}>Open company profile</button>
+                        </div>
+                        <label className="filter-control" style={{ width: 175, margin: 0 }}>
+                          <span>Application stage</span>
+                          <select className="filter-select" value={item.status} onChange={(event) => updateTracker(company.company_id, { status: event.target.value as TrackerStatus })}>
+                            {TRACKER_STATUSES.map((status) => <option key={status} value={status}>{status}</option>)}
+                          </select>
+                        </label>
+                        <button type="button" className="page-button" onClick={() => toggleSaved(company.company_id)} aria-pressed={item.saved}>
+                          <Star size={13} fill={item.saved ? 'currentColor' : 'none'} /> {item.saved ? 'Unsave' : 'Save'}
+                        </button>
+                      </div>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, .65fr) minmax(0, 1.35fr)', gap: 12, marginTop: 14 }}>
+                        <label className="filter-control" style={{ margin: 0 }}>
+                          <span>Follow-up date</span>
+                          <input type="date" value={item.followUpDate} onChange={(event) => updateTracker(company.company_id, { followUpDate: event.target.value })} style={{ padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                        </label>
+                        <label className="filter-control" style={{ margin: 0 }}>
+                          <span>Notes / next action</span>
+                          <textarea value={item.notes} onChange={(event) => updateTracker(company.company_id, { notes: event.target.value })} rows={2} placeholder="What do you need to do next?" style={{ width: '100%', boxSizing: 'border-box', resize: 'vertical', padding: 9, border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12, lineHeight: 1.5 }} />
+                        </label>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
         ) : data && tab === 'skills' ? (
           <section className="panel skills">
             <label className="filter-control">
@@ -660,15 +1040,30 @@ export default function App() {
                 )}
               </select>
             </label>
+            <label className="search" style={{ marginTop: 14 }}>
+              <Search size={16} />
+              <input value={skillQuery} onChange={(event) => setSkillQuery(event.target.value)}
+                placeholder="Search skills, tools or learning topics" aria-label="Search skill roadmap" />
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+              <button type="button" className="page-button" aria-pressed={requiredOnly}
+                onClick={() => setRequiredOnly((value) => !value)}
+                style={requiredOnly ? { background: '#e4e9de', boxShadow: 'inset 0 0 0 1px #788a79' } : undefined}>
+                <Target size={13} /> {requiredOnly ? 'Showing required skills' : 'Show required skills only'}
+              </button>
+              <span style={{ color: '#69766d', fontSize: 10 }}>
+                {visibleSkills.length} matching skill areas · {skills.reduce((sum, skill) => sum + skill.topics.length, 0)} roadmap topics
+              </span>
+            </div>
             <div className="panel-title">
               <div>
                 <h2>Required skill matrix</h2>
                 <p>{displayValue(current?.name)}</p>
               </div>
-              <span>{skills.length} skill areas</span>
+              <span>{visibleSkills.length} skill areas</span>
             </div>
             <div className="skill-grid">
-              {skills.map((skill) => {
+              {visibleSkills.map((skill) => {}
                 const level = skill.req?.required_level;
                 const levelIsPresent = hasValue(level);
                 const proficiencyName = skill.proficiency?.proficiency_name;
@@ -706,12 +1101,15 @@ export default function App() {
                   </details>
                 );
               })}
-              {skills.length === 0 && (
-                <p>No skill areas are available for this company.</p>
+              {visibleSkills.length === 0 && (
+                <div className="empty-results" style={{ gridColumn: '1 / -1' }}>
+                  <BrainCircuit size={22} /><b>No matching skills</b>
+                  <span>Try a different search or turn off the required-skills-only filter.</span>
+                </div>
               )}
             </div>
             <div className="note">
-              Select a company to review its available skill levels and topic details.
+              <TrendingUp size={15} /> Roadmaps are loaded from Supabase. A missing company requirement is not evidence that a skill is unimportant.
             </div>
           </section>
         ) : null}
@@ -725,6 +1123,10 @@ export default function App() {
           {' | '}
           <a href="#terms" onClick={(event) => { event.preventDefault(); navigateToStaticPage('terms'); }}>
             Terms
+          </a>
+          {' | '}
+          <a href="#tab=tracker" onClick={(event) => { event.preventDefault(); navigateToAppTab('tracker'); }}>
+            My tracker
           </a>
         </footer>
       </main>
