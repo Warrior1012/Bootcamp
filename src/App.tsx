@@ -11,8 +11,57 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { loadData } from './lib/supabase';
+import type {
+  AppData,
+  CompanyRecord,
+  ProfileField,
+  ProficiencyLevelRecord,
+  SkillRequirementRecord,
+  SkillSetRecord,
+  SkillTopicRecord,
+  SkillWithDetails,
+} from './types';
 
-function externalUrl(value: any): string | null {
+type AppTab = 'companies' | 'skills';
+type AppView = AppTab | 'privacy' | 'terms';
+
+type HashRoute = {
+  tab: AppView;
+  companyId: string | null;
+};
+
+function readHashRoute(hash?: string): HashRoute {
+  const value = (hash ?? (typeof window === 'undefined' ? '' : window.location.hash)).replace(/^#/, '');
+
+  if (value === 'privacy' || value === 'terms') {
+    return { tab: value, companyId: null };
+  }
+
+  const params = new URLSearchParams(value);
+  const requestedTab = params.get('tab');
+  const tab: AppTab = requestedTab === 'skills' ? 'skills' : 'companies';
+
+  return {
+    tab,
+    companyId: params.get('company'),
+  };
+}
+
+function appHash(tab: AppTab, companyId: number | null): string {
+  if (companyId === null) return '#tab=' + tab;
+  return '#company=' + encodeURIComponent(String(companyId)) + '&tab=' + tab;
+}
+
+function replaceHash(hash: string): void {
+  if (typeof window === 'undefined' || window.location.hash === hash) return;
+  window.history.replaceState(
+    window.history.state,
+    '',
+    window.location.pathname + window.location.search + hash,
+  );
+}
+
+function externalUrl(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   const input = value.trim();
   if (!input || /\s/.test(input)) return null;
@@ -32,7 +81,7 @@ function externalUrl(value: any): string | null {
   }
 }
 
-function findLinkedInUrl(value: any, depth = 0): string | null {
+function findLinkedInUrl(value: unknown, depth = 0): string | null {
   if (depth > 6 || !value || typeof value !== 'object') return null;
 
   for (const [key, child] of Object.entries(value)) {
@@ -51,33 +100,52 @@ function findLinkedInUrl(value: any, depth = 0): string | null {
   return null;
 }
 
-function categoryOf(company: any): string {
-  return String(company.category || company.nature_of_company || 'Other');
+function categoryOf(company: CompanyRecord): string {
+  const category = typeof company.category === 'string' ? company.category.trim() : '';
+  const nature = typeof company.nature_of_company === 'string' ? company.nature_of_company.trim() : '';
+  return category || nature || 'Not available';
+}
+
+function displayValue(value: unknown): string {
+  if (value === null || value === undefined) return 'Not available';
+  if (typeof value === 'string') return value.trim() || 'Not available';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return 'Not available';
+}
+
+function hasValue(value: unknown): boolean {
+  return value !== null && value !== undefined && String(value).trim() !== '';
+}
+
+function routeCompany(companies: CompanyRecord[], routeId: string | null): CompanyRecord | null {
+  if (routeId !== null) {
+    const match = companies.find((company) => String(company.company_id) === routeId);
+    if (match) return match;
+  }
+  return companies[0] ?? null;
 }
 
 export default function App() {
-  const [data, setData] = useState<any>(null);
-  const [err, setErr] = useState('');
+  const [data, setData] = useState<AppData | null>(null);
+  const [err, setErr] = useState(false);
   const [busy, setBusy] = useState(true);
   const [q, setQ] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [pageSize, setPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<number | null>(null);
-  const [tab, setTab] = useState('companies');
+  const [tab, setTab] = useState<AppView>(() => readHashRoute().tab);
 
   async function refresh() {
     setBusy(true);
-    setErr('');
+    setErr(false);
     try {
       const result = await loadData();
       setData(result);
       setPage(1);
-      if (selected === null && result.companies.length) {
-        setSelected(result.companies[0].company_id);
-      }
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Database request failed');
+    } catch (error) {
+      console.error('Could not load company data.', error);
+      setErr(true);
     } finally {
       setBusy(false);
     }
@@ -87,19 +155,48 @@ export default function App() {
     void refresh();
   }, []);
 
-  const allCompanies = data?.companies || [];
+  useEffect(() => {
+    function syncFromHash() {
+      const route = readHashRoute();
+      setTab(route.tab);
+
+      if (route.tab === 'privacy' || route.tab === 'terms') return;
+
+      if (!data) {
+        if (route.companyId !== null) {
+          const parsedId = Number(route.companyId);
+          setSelected(Number.isFinite(parsedId) ? parsedId : null);
+        }
+        return;
+      }
+
+      const company = routeCompany(data.companies || [], route.companyId);
+      setSelected(company ? company.company_id : null);
+      const normalizedHash = appHash(route.tab, company ? company.company_id : null);
+      replaceHash(normalizedHash);
+    }
+
+    window.addEventListener('hashchange', syncFromHash);
+    syncFromHash();
+    return () => window.removeEventListener('hashchange', syncFromHash);
+  }, [data]);
+
+  const allCompanies: CompanyRecord[] = data?.companies || [];
   const categories = Array.from(
-    new Set<string>(allCompanies.map((company: any) => categoryOf(company))),
+    new Set<string>(allCompanies.map((company) => categoryOf(company))),
   ).sort((a: string, b: string) => a.localeCompare(b));
   const needle = q.trim().toLowerCase();
-  const companies = allCompanies.filter((company: any) => {
+  const companies = allCompanies.filter((company) => {
     const searchable = [
       company.name,
       company.short_name,
       company.category,
       company.nature_of_company,
       company.headquarters_address,
-    ].filter(Boolean).join(' ').toLowerCase();
+    ]
+      .filter((value) => hasValue(value))
+      .join(' ')
+      .toLowerCase();
 
     return searchable.includes(needle) &&
       (categoryFilter === 'all' || categoryOf(company) === categoryFilter);
@@ -112,9 +209,11 @@ export default function App() {
   const rangeStart = companies.length ? startIndex + 1 : 0;
   const rangeEnd = Math.min(startIndex + pageSize, companies.length);
 
-  const current = allCompanies.find((company: any) => company.company_id === selected);
-  const profile = (data?.profiles || []).find((item: any) => item.company_id === selected);
-  const full = {
+  const current = allCompanies.find((company) => String(company.company_id) === String(selected));
+  const profile = (data?.profiles || []).find(
+    (item) => String(item.company_id) === String(selected),
+  );
+  const full: Record<string, unknown> = {
     ...(profile?.short_json || {}),
     ...(profile?.full_json || {}),
     ...(current || {}),
@@ -122,28 +221,97 @@ export default function App() {
   const websiteUrl = externalUrl(current?.website_url);
   const linkedinUrl = findLinkedInUrl(full);
 
-  const requirements = (data?.requirements || []).filter(
-    (item: any) => item.company_id === selected,
+  const requirements: SkillRequirementRecord[] = (data?.requirements || []).filter(
+    (item) => String(item.company_id) === String(selected),
   );
-  const skills = (data?.skills || []).map((skill: any) => ({
-    ...skill,
-    req: requirements.find((item: any) => item.skill_set_id === skill.skill_set_id),
-    topics: (data?.topics || []).filter(
-      (topic: any) => topic.skill_set_id === skill.skill_set_id,
-    ),
-  }));
+  const skills: SkillWithDetails[] = (data?.skills || [])
+    .map((skill: SkillSetRecord) => {
+      const requirement = requirements.find(
+        (item) => String(item.skill_set_id) === String(skill.skill_set_id),
+      );
+      const proficiency = requirement
+        ? (data?.proficiency || []).find(
+            (item: ProficiencyLevelRecord) =>
+              String(item.proficiency_level_id) ===
+              String(requirement.required_proficiency_level_id),
+          )
+        : undefined;
+      return {
+        ...skill,
+        req: requirement,
+        proficiency,
+        topics: (data?.topics || []).filter(
+          (topic: SkillTopicRecord) => String(topic.skill_set_id) === String(skill.skill_set_id),
+        ),
+      };
+    })
+    .sort((a, b) => {
+      const levelA = a.req?.required_level;
+      const levelB = b.req?.required_level;
+      const hasLevelA = hasValue(levelA) && Number.isFinite(Number(levelA));
+      const hasLevelB = hasValue(levelB) && Number.isFinite(Number(levelB));
 
-  const profileFields: any[] = current
+      if (hasLevelA && hasLevelB) return Number(levelB) - Number(levelA);
+      if (hasLevelA) return -1;
+      if (hasLevelB) return 1;
+      return displayValue(a.skill_set_name).localeCompare(displayValue(b.skill_set_name));
+    });
+
+  const profileFields: ProfileField[] = current
     ? [
-        ['Category', current.category, null],
-        ['Founded', current.incorporation_year, null],
-        ['Company type', current.nature_of_company, null],
-        ['Vision', full.vision_statement, null],
-        ['Mission', full.mission_statement, null],
-        ['Website', current.website_url, websiteUrl],
-        ...(linkedinUrl ? [['LinkedIn', 'View company profile', linkedinUrl]] : []),
+        { label: 'Category', value: current.category },
+        { label: 'Company type', value: current.nature_of_company },
+        { label: 'Vision', value: full.vision_statement },
+        { label: 'Mission', value: full.mission_statement },
+        { label: 'Website', value: current.website_url, href: websiteUrl },
+        ...(linkedinUrl
+          ? [{ label: 'LinkedIn', value: 'View company profile', href: linkedinUrl }]
+          : []),
       ]
     : [];
+
+  function writeRoute(hash: string) {
+    if (window.location.hash !== hash) window.location.hash = hash.slice(1);
+  }
+
+  function navigateToAppTab(nextTab: AppTab) {
+    const fallbackCompany = allCompanies.find(
+      (company) => String(company.company_id) === String(selected),
+    ) || allCompanies[0] || null;
+    const companyId = fallbackCompany ? fallbackCompany.company_id : null;
+
+    setTab(nextTab);
+    setSelected(companyId);
+    writeRoute(appHash(nextTab, companyId));
+  }
+
+  function navigateToStaticPage(nextTab: 'privacy' | 'terms') {
+    setTab(nextTab);
+    writeRoute('#' + nextTab);
+  }
+
+  function selectCompany(companyId: number, nextTab: AppTab, scrollToProfile: boolean) {
+    setSelected(companyId);
+    setTab(nextTab);
+    writeRoute(appHash(nextTab, companyId));
+
+    if (
+      scrollToProfile &&
+      window.matchMedia('(max-width: 780px)').matches
+    ) {
+      const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ? 'auto'
+        : 'smooth';
+      window.requestAnimationFrame(() => {
+        document.getElementById('company-profile')?.scrollIntoView({
+          behavior,
+          block: 'start',
+        });
+      });
+    }
+  }
+
+  const selectedForSkills = current ? String(current.company_id) : '';
 
   return (
     <div className="shell">
@@ -152,27 +320,29 @@ export default function App() {
           <span>J</span>
           <div>
             <b>JSSU</b>
-            <small>Placement Intelligence</small>
+            <small>Placement Intelligence Hub</small>
           </div>
         </div>
         <p className="label">WORKSPACE</p>
         <button
           className={tab === 'companies' ? 'nav active' : 'nav'}
-          onClick={() => setTab('companies')}
+          aria-current={tab === 'companies' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('companies')}
         >
           <Building2 size={17} /> Company directory
         </button>
         <button
           className={tab === 'skills' ? 'nav active' : 'nav'}
-          onClick={() => setTab('skills')}
+          aria-current={tab === 'skills' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('skills')}
         >
           <BrainCircuit size={17} /> Skill intelligence
         </button>
         <div className="connection">
           <i style={{ background: data ? '#19a66a' : '#e7a23b' }} />
           <div>
-            <b>Supabase</b>
-            <small>{data ? 'Connected · read-only' : 'Connection status'}</small>
+            <b>Company data</b>
+            <small>{data ? 'Company information available' : 'Company directory'}</small>
           </div>
         </div>
       </aside>
@@ -180,27 +350,103 @@ export default function App() {
       <main>
         <header>
           <div>
-            <span className="eyebrow">JSS UNIVERSITY, NOIDA / BOOTCAMP</span>
-            <h1>{tab === 'companies' ? 'Company directory' : 'Skill intelligence'}</h1>
+            <span className="eyebrow">JSS UNIVERSITY, NOIDA</span>
+            <h1>
+              {tab === 'companies'
+                ? 'Company directory'
+                : tab === 'skills'
+                  ? 'Skill intelligence'
+                  : tab === 'privacy'
+                    ? 'Privacy'
+                    : 'Terms'}
+            </h1>
           </div>
-          <button className="refresh" onClick={() => void refresh()} disabled={busy}>
+          <button
+            className="refresh"
+            onClick={() => void refresh()}
+            disabled={busy}
+            aria-label="Refresh data"
+          >
             <RefreshCw size={15} /> Refresh
           </button>
         </header>
 
         {err && (
-          <div className="alert">
+          <div className="alert" role="alert">
             <AlertCircle size={18} />
             <div>
-              <b>Could not load live data</b>
-              <p>{err}</p>
-              <small>Check .env.local and Supabase SELECT policies.</small>
+              <b>Could not load company data. Please try again.</b>
+              <button
+                type="button"
+                className="page-button"
+                onClick={() => void refresh()}
+                disabled={busy}
+              >
+                Retry
+              </button>
             </div>
           </div>
         )}
 
-        {busy ? (
-          <div className="loading">Connecting to your Supabase project…</div>
+        {tab === 'privacy' ? (
+          <section className="panel">
+            <div className="details">
+              <h3>Privacy</h3>
+              <p>
+                JSSU Placement Intelligence Hub presents read-only public company information,
+                company profiles, skill requirements, and topic information from its configured dataset.
+                Values that are not present in the dataset are shown as unavailable.
+              </p>
+              <p>
+                This application does not provide visitor accounts, sign-in, or a form to submit
+                personal information. This statement describes the application interface and does
+                not make claims about logs or retention practices of the hosting or data providers.
+              </p>
+              <p>
+                The interface loads fonts from Google Fonts. When those fonts are requested, the
+                browser connects to Google to retrieve them. Refer to Google's own documentation
+                for how its services process technical request information.
+              </p>
+              <div className="note">
+                TODO: Add the owner's contact email before public release.
+              </div>
+              <p>
+                <a href={appHash('companies', selected ?? (allCompanies[0]?.company_id ?? null))}>
+                  Return to the company directory
+                </a>
+              </p>
+            </div>
+          </section>
+        ) : tab === 'terms' ? (
+          <section className="panel">
+            <div className="details">
+              <h3>Terms</h3>
+              <p>
+                JSSU Placement Intelligence Hub lets visitors browse read-only public company
+                information and skill details available in the configured dataset. Some values may be missing or
+                may change when the source data is updated.
+              </p>
+              <p>
+                Company websites and social profile links, when available, open on external
+                websites. The contents and availability of those external websites are outside this
+                application's interface.
+              </p>
+              <p>
+                Check important company details against the relevant company's own sources before
+                relying on them.
+              </p>
+              <div className="note">
+                TODO: Add the owner's contact email before public release.
+              </div>
+              <p>
+                <a href={appHash('companies', selected ?? (allCompanies[0]?.company_id ?? null))}>
+                  Return to the company directory
+                </a>
+              </p>
+            </div>
+          </section>
+        ) : busy && !data ? (
+          <div className="loading">Loading companies...</div>
         ) : data && tab === 'companies' ? (
           <div className="layout">
             <section className="panel list">
@@ -238,24 +484,27 @@ export default function App() {
                 >
                   <option value="all">All categories</option>
                   {categories.map((category: string) => (
-                    <option value={category} key={category}>{category}</option>
+                    <option value={category} key={category}>
+                      {category}
+                    </option>
                   ))}
                 </select>
               </label>
 
               <div className="company-results" aria-live="polite">
-                {visibleCompanies.map((company: any) => (
+                {visibleCompanies.map((company) => (
                   <button
                     className={'company ' + (selected === company.company_id ? 'chosen' : '')}
                     key={company.company_id}
-                    onClick={() => setSelected(company.company_id)}
+                    aria-pressed={selected === company.company_id}
+                    onClick={() => selectCompany(company.company_id, 'companies', true)}
                   >
                     <b className="mark">
-                      {(company.short_name || company.name || '?').slice(0, 1)}
+                      {(company.short_name || company.name || 'J').slice(0, 1)}
                     </b>
                     <span>
-                      <strong>{company.name}</strong>
-                      <small>{company.category || company.nature_of_company || 'Company profile'}</small>
+                      <strong>{displayValue(company.name)}</strong>
+                      <small>{categoryOf(company)}</small>
                     </span>
                   </button>
                 ))}
@@ -280,7 +529,9 @@ export default function App() {
 
               <div className="pagination">
                 <div className="pagination-summary">
-                  <span>Showing <b>{rangeStart}–{rangeEnd}</b> of <b>{companies.length}</b></span>
+                  <span>
+                    Showing <b>{rangeStart} to {rangeEnd}</b> of <b>{companies.length}</b>
+                  </span>
                   <label className="page-size">
                     <span>Per page</span>
                     <select
@@ -320,46 +571,57 @@ export default function App() {
               </div>
             </section>
 
-            <section className="panel profile">
+            <section className="panel profile" id="company-profile">
               {current ? (
                 <>
                   <div className="profile-head">
                     <b className="mark big">
-                      {(current.short_name || current.name || '?').slice(0, 1)}
+                      {(current.short_name || current.name || 'J').slice(0, 1)}
                     </b>
                     <div>
                       <span className="eyebrow">COMPANY PROFILE</span>
-                      <h2>{current.name}</h2>
-                      <p>{current.headquarters_address || 'Headquarters not listed'}</p>
+                      <h2>{displayValue(current.name)}</h2>
+                      <p>{displayValue(current.headquarters_address)}</p>
                     </div>
                   </div>
                   <div className="stats">
-                    <div><small>Company ID</small><b>{current.company_id}</b></div>
-                    <div><small>Skill requirements</small><b>{requirements.length}</b></div>
-                    <div><small>Skill areas</small><b>{data.skills.length}</b></div>
+                    <div>
+                      <small>Employee size</small>
+                      <b>{displayValue(current.employee_size)}</b>
+                    </div>
+                    <div>
+                      <small>Skill requirements</small>
+                      <b>{requirements.length}</b>
+                    </div>
+                    <div>
+                      <small>Founded</small>
+                      <b>{displayValue(current.incorporation_year)}</b>
+                    </div>
                   </div>
                   <div className="details">
                     <h3>Company overview</h3>
-                    <p>{full.overview_text || full.company_overview || 'No overview provided in the database.'}</p>
-                    {profileFields.map(([label, value, href]) => (
-                      <div className="field" key={String(label)}>
-                        <span>{label}</span>
+                    <p>{displayValue(full.overview_text || full.company_overview)}</p>
+                    {profileFields.map((field) => (
+                      <div className="field" key={field.label}>
+                        <span>{field.label}</span>
                         <b>
-                          {href ? (
+                          {field.href ? (
                             <a
                               className="external-link"
-                              href={href}
+                              href={field.href}
                               target="_blank"
                               rel="noopener noreferrer"
                             >
-                              {value} <ExternalLink size={13} />
+                              {displayValue(field.value)} <ExternalLink size={13} />
                             </a>
-                          ) : value || 'Not available'}
+                          ) : (
+                            displayValue(field.value)
+                          )}
                         </b>
                       </div>
                     ))}
                     <div className="note">
-                      <Database size={15} /> Live Supabase data. Missing values are shown honestly.
+                      <Database size={15} /> Company details are shown as provided by the available dataset.
                     </div>
                   </div>
                 </>
@@ -372,48 +634,99 @@ export default function App() {
               )}
             </section>
           </div>
-        ) : data ? (
+        ) : data && tab === 'skills' ? (
           <section className="panel skills">
+            <label className="filter-control">
+              <span>Select company</span>
+              <select
+                className="filter-select"
+                value={selectedForSkills}
+                onChange={(event) => {
+                  const chosenCompany = allCompanies.find(
+                    (company) => String(company.company_id) === event.target.value,
+                  );
+                  if (chosenCompany) selectCompany(chosenCompany.company_id, 'skills', false);
+                }}
+                aria-label="Select company for skill intelligence"
+              >
+                {allCompanies.length === 0 ? (
+                  <option value="">Not available</option>
+                ) : (
+                  allCompanies.map((company) => (
+                    <option key={company.company_id} value={String(company.company_id)}>
+                      {displayValue(company.name)}
+                    </option>
+                  ))
+                )}
+              </select>
+            </label>
             <div className="panel-title">
               <div>
                 <h2>Required skill matrix</h2>
-                <p>{current ? current.name : 'Select a company from Company directory first'}</p>
+                <p>{displayValue(current?.name)}</p>
               </div>
               <span>{skills.length} skill areas</span>
             </div>
             <div className="skill-grid">
-              {skills.map((skill: any) => (
-                <details className="skill" key={skill.skill_set_id}>
-                  <summary>
-                    <BrainCircuit size={18} />
-                    <span>
-                      <b>{skill.skill_set_name}</b>
-                      <small>
-                        {skill.req?.required_level
-                          ? 'Target level ' + skill.req.required_level + '/10'
-                          : 'No company requirement'}
-                      </small>
-                    </span>
-                    <strong>{skill.req?.required_level || '—'}</strong>
-                  </summary>
-                  <div className="bar">
-                    <i style={{ width: (Number(skill.req?.required_level) || 0) * 10 + '%' }} />
-                  </div>
-                  {skill.topics.map((topic: any) => (
-                    <p className="topic" key={topic.level_number}>
-                      <b>Level {topic.level_number}</b> {topic.topics}
-                    </p>
-                  ))}
-                </details>
-              ))}
+              {skills.map((skill) => {
+                const level = skill.req?.required_level;
+                const levelIsPresent = hasValue(level);
+                const proficiencyName = skill.proficiency?.proficiency_name;
+                const levelText = levelIsPresent
+                  ? 'Target level ' + displayValue(level) + '/10' +
+                    (hasValue(proficiencyName) ? ' · ' + displayValue(proficiencyName) : '')
+                  : hasValue(proficiencyName)
+                    ? displayValue(proficiencyName)
+                    : 'No company requirement';
+
+                return (
+                  <details className="skill" key={skill.skill_set_id}>
+                    <summary>
+                      <BrainCircuit size={18} />
+                      <span>
+                        <b>{displayValue(skill.skill_set_name)}</b>
+                        <small>{levelText}</small>
+                      </span>
+                      <strong>{levelIsPresent ? displayValue(level) : 'Not required'}</strong>
+                    </summary>
+                    <div className="bar">
+                      <i
+                        style={{
+                          width: (levelIsPresent && Number.isFinite(Number(level))
+                            ? Math.min(10, Math.max(0, Number(level)))
+                            : 0) * 10 + '%',
+                        }}
+                      />
+                    </div>
+                    {skill.topics.map((topic, index) => (
+                      <p className="topic" key={String(topic.level_number) + '-' + index}>
+                        <b>Level {displayValue(topic.level_number)}</b> {displayValue(topic.topics)}
+                      </p>
+                    ))}
+                  </details>
+                );
+              })}
+              {skills.length === 0 && (
+                <p>No skill areas are available for this company.</p>
+              )}
             </div>
             <div className="note">
-              <Database size={15} /> Skills, proficiency levels and topic roadmaps are read from Supabase.
+              Select a company to review its available skill levels and topic details.
             </div>
           </section>
         ) : null}
 
-        <footer>Read-only Supabase connection · No service-role key in frontend</footer>
+        <footer>
+          JSS University, Noida
+          {' | '}
+          <a href="#privacy" onClick={(event) => { event.preventDefault(); navigateToStaticPage('privacy'); }}>
+            Privacy
+          </a>
+          {' | '}
+          <a href="#terms" onClick={(event) => { event.preventDefault(); navigateToStaticPage('terms'); }}>
+            Terms
+          </a>
+        </footer>
       </main>
     </div>
   );
