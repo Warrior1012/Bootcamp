@@ -17,6 +17,11 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  GraduationCap,
+  BookOpen,
+  CheckCircle2,
+  Clock3,
+  UserRound,
 } from 'lucide-react';
 import { loadData } from './lib/supabase';
 import type {
@@ -30,8 +35,23 @@ import type {
   SkillWithDetails,
 } from './types';
 
-type AppTab = 'companies' | 'skills' | 'tracker';
+type AppTab = 'companies' | 'skills' | 'tracker' | 'prep';
 type AppView = AppTab | 'privacy' | 'terms';
+
+type StudentProfile = {
+  name: string;
+  graduationYear: string;
+  targetRole: string;
+  careerTrack: string;
+  weeklyHours: number;
+};
+
+type PrepTask = {
+  id: string;
+  skillName: string;
+  title: string;
+  detail: string;
+};
 
 type TrackerStatus =
   | 'Not tracked' | 'Interested' | 'Researching' | 'Applied'
@@ -54,6 +74,84 @@ const TRACKER_STATUSES: TrackerStatus[] = [
 const EMPTY_TRACKER_ENTRY: CompanyTrackerEntry = {
   saved: false, status: 'Not tracked', notes: '', followUpDate: '', updatedAt: '',
 };
+
+const STUDENT_PROFILE_STORAGE_KEY = 'jssu-student-profile-v1';
+const SKILL_RATINGS_STORAGE_KEY = 'jssu-skill-ratings-v1';
+const PREP_CHECKLIST_STORAGE_KEY = 'jssu-prep-checklist-v1';
+
+const DEFAULT_STUDENT_PROFILE: StudentProfile = {
+  name: '',
+  graduationYear: '',
+  targetRole: '',
+  careerTrack: 'Software Development',
+  weeklyHours: 6,
+};
+
+const CAREER_TRACKS = [
+  'Software Development',
+  'AI / Machine Learning',
+  'Data Analytics',
+  'Cybersecurity',
+  'Cloud / DevOps',
+  'Product / Business',
+  'Other',
+];
+
+function readStudentProfile(): StudentProfile {
+  if (typeof window === 'undefined') return DEFAULT_STUDENT_PROFILE;
+  try {
+    const raw = window.localStorage.getItem(STUDENT_PROFILE_STORAGE_KEY);
+    if (!raw) return DEFAULT_STUDENT_PROFILE;
+    const parsed = JSON.parse(raw) as Partial<StudentProfile>;
+    const hours = Number(parsed.weeklyHours);
+    return {
+      name: typeof parsed.name === 'string' ? parsed.name : '',
+      graduationYear: typeof parsed.graduationYear === 'string' ? parsed.graduationYear : '',
+      targetRole: typeof parsed.targetRole === 'string' ? parsed.targetRole : '',
+      careerTrack: typeof parsed.careerTrack === 'string' && CAREER_TRACKS.includes(parsed.careerTrack)
+        ? parsed.careerTrack
+        : DEFAULT_STUDENT_PROFILE.careerTrack,
+      weeklyHours: Number.isFinite(hours) ? Math.min(20, Math.max(1, Math.round(hours))) : DEFAULT_STUDENT_PROFILE.weeklyHours,
+    };
+  } catch {
+    return DEFAULT_STUDENT_PROFILE;
+  }
+}
+
+function readSkillRatings(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(SKILL_RATINGS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const clean: Record<string, number> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      const rating = Number(value);
+      if (Number.isInteger(rating) && rating >= 1 && rating <= 5) clean[id] = rating;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+function readPrepChecklist(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PREP_CHECKLIST_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (!parsed || typeof parsed !== 'object') return {};
+    const clean: Record<string, boolean> = {};
+    for (const [id, value] of Object.entries(parsed)) {
+      if (typeof value === 'boolean') clean[id] = value;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
 
 function readTrackerStore(): TrackerStore {
   if (typeof window === 'undefined') return {};
@@ -120,7 +218,13 @@ function readHashRoute(hash?: string): HashRoute {
 
   const params = new URLSearchParams(value);
   const requestedTab = params.get('tab');
-  const tab: AppTab = requestedTab === 'skills' ? 'skills' : requestedTab === 'tracker' ? 'tracker' : 'companies';
+  const tab: AppTab = requestedTab === 'skills'
+    ? 'skills'
+    : requestedTab === 'tracker'
+      ? 'tracker'
+      : requestedTab === 'prep'
+        ? 'prep'
+        : 'companies';
 
   return {
     tab,
@@ -217,6 +321,9 @@ export default function App() {
   const [selected, setSelected] = useState<number | null>(null);
   const [tab, setTab] = useState<AppView>(() => readHashRoute().tab);
   const [tracker, setTracker] = useState<TrackerStore>(() => readTrackerStore());
+  const [studentProfile, setStudentProfile] = useState<StudentProfile>(() => readStudentProfile());
+  const [skillRatings, setSkillRatings] = useState<Record<string, number>>(() => readSkillRatings());
+  const [prepChecklist, setPrepChecklist] = useState<Record<string, boolean>>(() => readPrepChecklist());
   const [directoryMode, setDirectoryMode] = useState<'all' | 'saved' | 'tracked'>('all');
   const [skillQuery, setSkillQuery] = useState('');
   const [requiredOnly, setRequiredOnly] = useState(false);
@@ -248,6 +355,30 @@ export default function App() {
       // Keep the dashboard functional when browser storage is disabled or full.
     }
   }, [tracker]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STUDENT_PROFILE_STORAGE_KEY, JSON.stringify(studentProfile));
+    } catch {
+      // Keep the profile available in the current session when storage is unavailable.
+    }
+  }, [studentProfile]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(SKILL_RATINGS_STORAGE_KEY, JSON.stringify(skillRatings));
+    } catch {
+      // Keep self-assessment usable in the current session when storage is unavailable.
+    }
+  }, [skillRatings]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(PREP_CHECKLIST_STORAGE_KEY, JSON.stringify(prepChecklist));
+    } catch {
+      // Keep checklist updates available in the current session when storage is unavailable.
+    }
+  }, [prepChecklist]);
 
   useEffect(() => {
     function syncFromHash() {
@@ -505,6 +636,72 @@ export default function App() {
 
   const selectedForSkills = current ? String(current.company_id) : '';
 
+  const ratedSkillCount = skills.filter((skill) => (skillRatings[String(skill.skill_set_id)] || 0) > 0).length;
+  const prepSkillAnalysis = skills.map((skill) => {
+    const rating = skillRatings[String(skill.skill_set_id)] || 0;
+    const rawTarget = skill.req?.required_level;
+    const targetLevel = skill.req && hasValue(rawTarget) && Number.isFinite(Number(rawTarget))
+      ? Number(rawTarget)
+      : null;
+    const gap = targetLevel === null ? null : Math.max(0, targetLevel - rating * 2);
+    const priorityScore = rating > 0
+      ? gap !== null
+        ? gap
+        : rating <= 2
+          ? 6 - rating
+          : 0
+      : 0;
+    return { skill, rating, targetLevel, gap, priorityScore };
+  }).filter((item) => item.priorityScore > 0)
+    .sort((a, b) => b.priorityScore - a.priorityScore || a.rating - b.rating);
+  const prepPriorities = prepSkillAnalysis.slice(0, 3);
+  const prepTasks: PrepTask[] = prepPriorities.flatMap((item) => {
+    const sortedTopics = item.skill.topics.slice().sort((a, b) => {
+      const levelA = Number(a.level_number);
+      const levelB = Number(b.level_number);
+      if (Number.isFinite(levelA) && Number.isFinite(levelB)) return levelA - levelB;
+      return displayValue(a.topics).localeCompare(displayValue(b.topics));
+    });
+    const nextTopics = sortedTopics.filter((topic) => {
+      const level = Number(topic.level_number);
+      return Number.isFinite(level) && level > item.rating;
+    }).slice(0, 2);
+    if (nextTopics.length === 0) {
+      return [{
+        id: 'skill-' + item.skill.skill_set_id + '-practice',
+        skillName: displayValue(item.skill.skill_set_name),
+        title: 'Build a small project using ' + displayValue(item.skill.skill_set_name),
+        detail: 'Create one working example, write down what you learned, and keep the code in your portfolio.',
+      }];
+    }
+    return nextTopics.map((topic, index) => ({
+      id: 'skill-' + item.skill.skill_set_id + '-topic-' + String(topic.level_number) + '-' + index,
+      skillName: displayValue(item.skill.skill_set_name),
+      title: 'Study: ' + displayValue(topic.topics),
+      detail: 'Practice the concept with a small example, then explain it in your own words.',
+    }));
+  });
+  const prepDoneCount = prepTasks.filter((task) => Boolean(prepChecklist[task.id])).length;
+  const prepProgress = prepTasks.length > 0 ? Math.round((prepDoneCount / prepTasks.length) * 100) : 0;
+  const companyRequirementCount = skills.filter((skill) => skill.req && hasValue(skill.req.required_level)).length;
+
+  function updateStudentProfile(patch: Partial<StudentProfile>) {
+    setStudentProfile((previous) => ({ ...previous, ...patch }));
+  }
+
+  function updateSkillRating(skillId: number, rawValue: string) {
+    const nextValue = Number(rawValue);
+    setSkillRatings((previous) => {
+      const updated = { ...previous };
+      if (Number.isInteger(nextValue) && nextValue >= 1 && nextValue <= 5) {
+        updated[String(skillId)] = nextValue;
+      } else {
+        delete updated[String(skillId)];
+      }
+      return updated;
+    });
+  }
+
   return (
     <div className="shell">
       <aside>
@@ -538,6 +735,13 @@ export default function App() {
           <ClipboardList size={17} /> My tracker
           {trackedCompanies.length > 0 && <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 800 }}>{trackedCompanies.length}</span>}
         </button>
+        <button
+          className={tab === 'prep' ? 'nav active' : 'nav'}
+          aria-current={tab === 'prep' ? 'page' : undefined}
+          onClick={() => navigateToAppTab('prep')}
+        >
+          <GraduationCap size={17} /> Prep plan
+        </button>
         <div className="connection">
           <i style={{ background: data ? '#19a66a' : '#e7a23b' }} />
           <div>
@@ -558,9 +762,11 @@ export default function App() {
                   ? 'Skill intelligence'
                   : tab === 'tracker'
                     ? 'Company tracker'
-                    : tab === 'privacy'
-                      ? 'Privacy'
-                      : 'Terms'}
+                    : tab === 'prep'
+                      ? 'My prep plan'
+                      : tab === 'privacy'
+                        ? 'Privacy'
+                        : 'Terms'}
             </h1>
           </div>
           <button
@@ -592,10 +798,21 @@ export default function App() {
 
         {!busy && data && tab !== 'privacy' && tab !== 'terms' && (
           <section className="stats" aria-label="Workspace summary" style={{ marginBottom: 20, gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
-            <div><small>Companies</small><b>{allCompanies.length}</b></div>
-            <div><small>Saved</small><b>{savedCount}</b></div>
-            <div><small>In progress</small><b>{activeCount}</b></div>
-            <div><small>Follow-ups due</small><b>{followUpsDue.length}</b></div>
+            {tab === 'prep' ? (
+              <>
+                <div><small>Skills rated</small><b>{ratedSkillCount}/{skills.length}</b></div>
+                <div><small>Priority skills</small><b>{prepPriorities.length}</b></div>
+                <div><small>Weekly hours</small><b>{studentProfile.weeklyHours}h</b></div>
+                <div><small>Plan progress</small><b>{prepDoneCount}/{prepTasks.length}</b></div>
+              </>
+            ) : (
+              <>
+                <div><small>Companies</small><b>{allCompanies.length}</b></div>
+                <div><small>Saved</small><b>{savedCount}</b></div>
+                <div><small>In progress</small><b>{activeCount}</b></div>
+                <div><small>Follow-ups due</small><b>{followUpsDue.length}</b></div>
+              </>
+            )}
           </section>
         )}
         {data?.warnings && data.warnings.length > 0 && tab !== 'privacy' && tab !== 'terms' && (
@@ -615,8 +832,9 @@ export default function App() {
               </p>
               <p>
                 This application does not provide visitor accounts or sign-in. Saved companies,
-                application stages, follow-up dates and notes are stored in this browser and are not
-                synced to an account or database. Avoid entering sensitive personal information.
+                application stages, follow-up dates, notes, your optional student profile, skill ratings
+                and checklist progress are stored in this browser and are not synced to an account or
+                database. Avoid entering sensitive personal information.
                 This statement does not make claims about logs or retention practices of the hosting
                 or data providers.
               </p>
@@ -1136,6 +1354,187 @@ export default function App() {
             </div>
             <div className="note">
               <TrendingUp size={15} /> Roadmaps are loaded from Supabase. A missing company requirement is not evidence that a skill is unimportant.
+            </div>
+          </section>
+        ) : data && tab === 'prep' ? (
+          <section className="panel skills">
+            <div className="panel-title">
+              <div>
+                <h2>Build a practical weekly plan</h2>
+                <p>Set your direction, assess your current level, then turn the biggest gaps into small actions.</p>
+              </div>
+              <span>{prepTasks.length} suggested tasks</span>
+            </div>
+
+            <div className="note" style={{ marginTop: 0, marginBottom: 18 }}>
+              <UserRound size={15} /> Your profile, ratings and completed tasks save automatically in this browser. There is no account sync.
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(245px, 1fr))', gap: 14, marginBottom: 24 }}>
+              <article className="skill" style={{ background: '#fffef9' }}>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 0 }}>
+                  <UserRound size={17} /> Student profile
+                </h3>
+                <div style={{ display: 'grid', gap: 11 }}>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Name (optional)</span>
+                    <input value={studentProfile.name} onChange={(event) => updateStudentProfile({ name: event.target.value })} placeholder="Your name"
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Graduation year</span>
+                    <input inputMode="numeric" value={studentProfile.graduationYear} onChange={(event) => updateStudentProfile({ graduationYear: event.target.value.replace(/[^0-9]/g, '').slice(0, 4) })} placeholder="e.g. 2029" maxLength={4}
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Career track</span>
+                    <select className="filter-select" value={studentProfile.careerTrack} onChange={(event) => updateStudentProfile({ careerTrack: event.target.value })}>
+                      {CAREER_TRACKS.map((track) => <option key={track} value={track}>{track}</option>)}
+                    </select>
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Target role</span>
+                    <input value={studentProfile.targetRole} onChange={(event) => updateStudentProfile({ targetRole: event.target.value })} placeholder="e.g. Software Engineer"
+                      style={{ width: '100%', boxSizing: 'border-box', padding: '9px 10px', border: '1px solid #b9c0b2', borderRadius: 3, background: '#fffef9', color: '#293637', fontSize: 12 }} />
+                  </label>
+                  <label className="filter-control" style={{ margin: 0 }}>
+                    <span>Hours available per week: {studentProfile.weeklyHours}</span>
+                    <input type="range" min="1" max="20" step="1" value={studentProfile.weeklyHours} onChange={(event) => updateStudentProfile({ weeklyHours: Number(event.target.value) })}
+                      style={{ width: '100%', accentColor: '#526b59' }} />
+                  </label>
+                </div>
+              </article>
+
+              <article className="skill" style={{ background: '#fffef9' }}>
+                <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 0 }}>
+                  <Target size={17} /> Target company
+                </h3>
+                <p style={{ marginTop: 0 }}>Choose a company to use any available skill requirements as a reference.</p>
+                <label className="filter-control">
+                  <span>Company to prepare for</span>
+                  <select className="filter-select" value={selectedForSkills} onChange={(event) => {
+                    const chosenCompany = allCompanies.find((company) => String(company.company_id) === event.target.value);
+                    if (chosenCompany) selectCompany(chosenCompany.company_id, 'prep', false);
+                  }}>
+                    {allCompanies.length === 0
+                      ? <option value="">No companies available</option>
+                      : allCompanies.map((company) => <option key={company.company_id} value={String(company.company_id)}>{displayValue(company.name)}</option>)}
+                  </select>
+                </label>
+                <div style={{ marginTop: 16, padding: 12, border: '1px solid #d7dacf', borderRadius: 3 }}>
+                  <b style={{ display: 'block', marginBottom: 5 }}>{displayValue(current?.name)}</b>
+                  <span style={{ fontSize: 11, color: '#69766d' }}>{companyRequirementCount} skill areas have a numeric company target in the available dataset.</span>
+                </div>
+                {companyRequirementCount === 0 && (
+                  <div className="note" role="status">
+                    <Database size={15} /> No usable company-specific skill targets are available for this selection. Priorities will use your self-ratings only; this is not a company-match score.
+                  </div>
+                )}
+                {companyRequirementCount > 0 && (
+                  <div className="note">
+                    <Target size={15} /> Skills with numeric targets are compared on a 10-point scale. Self-ratings are converted from 1–5 by doubling them; use this as a rough planning aid, not an official assessment.
+                  </div>
+                )}
+              </article>
+            </div>
+
+            <div className="panel-title">
+              <div>
+                <h2>Skill self-assessment</h2>
+                <p>Rate what you can do today, not what you have only watched or read.</p>
+              </div>
+              <span>{ratedSkillCount} of {skills.length} rated</span>
+            </div>
+            <div style={{ display: 'grid', gap: 10, marginBottom: 22 }}>
+              {skills.map((skill) => {
+                const id = String(skill.skill_set_id);
+                const rating = skillRatings[id] || 0;
+                const hasTarget = Boolean(skill.req && hasValue(skill.req.required_level) && Number.isFinite(Number(skill.req.required_level)));
+                const target = hasTarget ? Number(skill.req?.required_level) : null;
+                const skillName = displayValue(skill.skill_set_name);
+                const statusText = rating === 0
+                  ? 'Not assessed'
+                  : target !== null
+                    ? rating * 2 < target
+                      ? 'Below the available target'
+                      : 'At or above the available target'
+                    : rating <= 2
+                      ? 'Consider for extra practice'
+                      : 'No company target to compare';
+                return (
+                  <article className="skill" key={skill.skill_set_id} style={{ background: '#fffef9' }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14, flexWrap: 'wrap' }}>
+                      <div style={{ flex: '1 1 200px', minWidth: 0 }}>
+                        <b style={{ display: 'block', color: '#293637', fontSize: 13 }}>{skillName}</b>
+                        {hasValue(skill.skill_set_description) && <p style={{ margin: '5px 0', fontSize: 11 }}>{displayValue(skill.skill_set_description)}</p>}
+                        <small style={{ display: 'block', color: '#69766d', marginTop: 5 }}>
+                          {target !== null ? 'Company target: ' + target + '/10' : 'Company target: unavailable'} · {statusText}
+                        </small>
+                      </div>
+                      <label className="filter-control" style={{ width: 210, maxWidth: '100%', margin: 0 }}>
+                        <span>Your current level</span>
+                        <select className="filter-select" value={rating ? String(rating) : ''} onChange={(event) => updateSkillRating(skill.skill_set_id, event.target.value)}>
+                          <option value="">Not assessed</option>
+                          <option value="1">1 · Just starting</option>
+                          <option value="2">2 · Learning basics</option>
+                          <option value="3">3 · Can do guided tasks</option>
+                          <option value="4">4 · Work independently</option>
+                          <option value="5">5 · Can build and explain</option>
+                        </select>
+                      </label>
+                    </div>
+                  </article>
+                );
+              })}
+              {skills.length === 0 && (
+                <div className="empty-results">
+                  <BrainCircuit size={22} /><b>No skill catalogue available</b>
+                  <span>The configured dataset did not return skills. The profile remains saved locally, but a topic-based plan needs skill data.</span>
+                </div>
+              )}
+            </div>
+
+            <div className="panel-title">
+              <div>
+                <h2>This week's action list</h2>
+                <p>{studentProfile.weeklyHours} focused hours per week · Start small and finish each task before adding more.</p>
+              </div>
+              <span>{prepDoneCount}/{prepTasks.length} complete</span>
+            </div>
+            <div style={{ height: 7, background: '#e0e4d9', borderRadius: 2, overflow: 'hidden', margin: '0 0 16px' }} aria-label={'Plan completion ' + prepProgress + '%'} role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={prepProgress}>
+              <div style={{ height: '100%', width: prepProgress + '%', background: '#526b59', transition: 'width 160ms ease' }} />
+            </div>
+            {prepTasks.length > 0 ? (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {prepTasks.map((task) => {
+                  const done = Boolean(prepChecklist[task.id]);
+                  return (
+                    <label key={task.id} className="skill" style={{ display: 'flex', alignItems: 'flex-start', gap: 11, background: done ? '#edf0e8' : '#fffef9', cursor: 'pointer' }}>
+                      <input type="checkbox" checked={done} onChange={(event) => setPrepChecklist((previous) => ({ ...previous, [task.id]: event.target.checked }))} style={{ marginTop: 3, accentColor: '#526b59' }} />
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <b style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#293637', fontSize: 12, textDecoration: done ? 'line-through' : 'none' }}>
+                          {done && <CheckCircle2 size={14} />} {task.title}
+                        </b>
+                        <small style={{ display: 'block', marginTop: 4, color: '#69766d' }}>{task.skillName}</small>
+                        <p style={{ marginBottom: 0 }}>{task.detail}</p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : ratedSkillCount === 0 ? (
+              <div className="empty-results">
+                <BookOpen size={23} /><b>Rate a few skills to start</b>
+                <span>Unassessed skills are not treated as weaknesses. Choose honest self-ratings above to generate a small, relevant learning checklist.</span>
+              </div>
+            ) : (
+              <div className="empty-results">
+                <CheckCircle2 size={23} /><b>No priority gaps detected from these inputs</b>
+                <span>{companyRequirementCount > 0 ? 'Your ratings do not show a positive numeric gap against the available targets.' : 'Your ratings are mostly above the low-confidence threshold. Review them honestly or choose a company with usable requirements.'}</span>
+              </div>
+            )}
+            <div className="note" style={{ marginTop: 18 }}>
+              <Clock3 size={15} /> Planning estimate only. Self-ratings can be inaccurate, and the dataset may be incomplete or outdated. Verify role requirements from official company sources.
             </div>
           </section>
         ) : null}
