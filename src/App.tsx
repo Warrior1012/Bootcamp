@@ -407,7 +407,8 @@ export default function App() {
   const activeCount = trackedCompanies.filter((company) =>
     ['Applied', 'Assessment', 'Interview', 'Offer'].includes((tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).status),
   ).length;
-  const todayKey = new Date().toLocaleDateString('en-CA');
+  const now = new Date();
+  const todayKey = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-');
   const followUpsDue = trackedCompanies.filter((company) => {
     const date = (tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY).followUpDate;
     return Boolean(date) && date <= todayKey;
@@ -434,6 +435,26 @@ export default function App() {
     setComparisonIds((previous) => previous.includes(companyId)
       ? previous.filter((id) => id !== companyId)
       : previous.length < 3 ? [...previous, companyId] : previous);
+  }
+
+  function exportTrackerCsv() {
+    const rows = trackedCompanies.map((company) => {
+      const item = tracker[String(company.company_id)] || EMPTY_TRACKER_ENTRY;
+      return [company.company_id, company.name || '', categoryOf(company), item.status, item.saved ? 'Yes' : 'No', item.followUpDate, item.notes];
+    });
+    const escapeCsv = (value: unknown) => '"' + String(value ?? '').replace(/"/g, '""') + '"';
+    const csv = [
+      ['Company ID', 'Company', 'Category', 'Status', 'Saved', 'Follow-up date', 'Notes'],
+      ...rows,
+    ].map((row) => row.map(escapeCsv).join(',')).join('\\r\\n');
+    const url = URL.createObjectURL(new Blob(['\\ufeff' + csv], { type: 'text/csv;charset=utf-8;' }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'jssu-placement-tracker.csv';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
   }
 
   function companyLogo(companyId: number): string | null {
@@ -579,7 +600,7 @@ export default function App() {
         )}
         {data?.warnings && data.warnings.length > 0 && tab !== 'privacy' && tab !== 'terms' && (
           <div className="note" role="status" style={{ marginBottom: 16, marginTop: 0 }}>
-            <Database size={15} /> Some optional datasets could not be loaded: {data.warnings.join(', ')}. Company browsing remains available.
+            <Database size={15} /> Some optional datasets could not be loaded: {data.warnings.slice(0, 3).join(', ')}{data.warnings.length > 3 ? ' and ' + (data.warnings.length - 3) + ' more' : ''}. Company browsing remains available.
           </div>
         )}
 
@@ -948,7 +969,12 @@ export default function App() {
           <section className="panel skills">
             <div className="panel-title">
               <div><h2>My company tracker</h2><p>Shortlist companies, manage application stages and remember your next action.</p></div>
-              <span>{trackedCompanies.length} tracked</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span>{trackedCompanies.length} tracked</span>
+                <button type="button" className="page-button" onClick={exportTrackerCsv} disabled={trackedCompanies.length === 0}>
+                  <ClipboardList size={13} /> Export CSV
+                </button>
+              </div>
             </div>
             <div className="note" style={{ marginTop: 0, marginBottom: 18 }}>
               <Bookmark size={15} /> Saved companies, stages, dates and notes are stored only in this browser, not synced across devices or written to Supabase.
