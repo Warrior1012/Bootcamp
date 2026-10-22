@@ -391,10 +391,10 @@ export default function App() {
         {tab === 'privacy' ? (
           <section className="panel">
             <div className="details">
-              <h2>Privacy</h2>
+              <h3>Privacy</h3>
               <p>
-                JSSU Placement Intelligence Hub displays company information, company profiles,
-                skill requirements, and topic information from its configured company dataset.
+                JSSU Placement Intelligence Hub presents read-only public company information,
+                company profiles, skill requirements, and topic information from its configured dataset.
                 Values that are not present in the dataset are shown as unavailable.
               </p>
               <p>
@@ -420,10 +420,10 @@ export default function App() {
         ) : tab === 'terms' ? (
           <section className="panel">
             <div className="details">
-              <h2>Terms</h2>
+              <h3>Terms</h3>
               <p>
-                JSSU Placement Intelligence Hub lets visitors browse the company information and
-                skill details available in the configured dataset. Some values may be missing or
+                JSSU Placement Intelligence Hub lets visitors browse read-only public company
+                information and skill details available in the configured dataset. Some values may be missing or
                 may change when the source data is updated.
               </p>
               <p>
